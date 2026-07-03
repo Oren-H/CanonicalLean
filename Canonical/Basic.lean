@@ -63,7 +63,7 @@ instance : ToString Expr where toString := typToString
 instance : ToString Rule where toString := ruleToString
 
 /-- Saves a JSON representation of the type to the given file. -/
-@[never_extract, extern "save_typ"] opaque save_typ : @& Expr → String → IO Unit
+@[never_extract, extern "save_problem"] opaque save_problem : @& Decl → String → IO Unit
 
 structure Config where
   /-- Canonical produces `count` proofs. -/
