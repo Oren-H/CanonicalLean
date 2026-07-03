@@ -8,8 +8,7 @@ public import Canonical.Monomorphize.Basic
 import Canonical.Destruct.Basic
 import Canonical.Symbols
 
-open Lean hiding Term
-open Meta Expr Std Monomorphize
+open Lean Meta Expr Std Monomorphize
 
 namespace Canonical
 
@@ -20,7 +19,7 @@ public section
 structure Definition where
   /-- `.undef` corresponds to a definition without translated type,
       but may acquire one as the translation progresses. -/
-  type: LOption Typ
+  type: LOption Canonical.Expr
   arity: Arity
   rules: Array Rule := #[]
   neighbors: HashSet String := {}
@@ -54,9 +53,9 @@ structure State where
 
 abbrev ToCanonicalM := ReaderT Context $ StateRefT State MonoM
 
-def toVar (e : Expr) : MetaM Var := do pure { name := ← toNameString e }
+def toVar (e : Lean.Expr) : MetaM Decl := do pure { name := ← toNameString e }
 
-def setType (key : String) (typ : LOption Typ) : ToCanonicalM Unit := do
+def setType (key : String) (typ : LOption Canonical.Expr) : ToCanonicalM Unit := do
   modify fun state => { state with definitions := state.definitions.insert key {
     (state.definitions.find? key).get! with type := typ } }
 
@@ -100,7 +99,7 @@ def addConstraints (rules : Array Rule) : ToCanonicalM Bool := do
   return false
 
 /-- Convert `proj`, `lit`, and `forallE` into applications of a head symbol. -/
-def elimSpecial (e : Expr) : MetaM Expr := do
+def elimSpecial (e : Lean.Expr) : MetaM Lean.Expr := do
   withApp e fun fn args =>
     match fn with
     | forallE name type body info => do
@@ -120,13 +119,13 @@ def elimSpecial (e : Expr) : MetaM Expr := do
     | _ => return e
 
 /-- Defines the `<synthInstance>` symbol with type `<instImplicit>`. -/
-def defineInstance (inhabited : Bool := true) : ToCanonicalM Typ := do
-  let typ : Typ := { spine := { head := "<instImplicit>" } }
+def defineInstance (inhabited : Bool := true) : ToCanonicalM Canonical.Expr := do
+  let typ : Canonical.Expr := { spine := { head := "<instImplicit>" } }
   modify (fun s => { s with definitions := (
     (s.definitions.insert "<instImplicit>" { arity := {}, type := .none }).insert "<synthInstance>" { arity := {}, type := .some typ } ).insert "<instUninhabited>" { arity := {}, type := .none } })
   return if inhabited then typ else { spine := { head := "<instUninhabited>" } }
 
-def monomorphizePremise (name : Name) : ToCanonicalM (Bool × Array (Expr × Expr × Name)) := do
+def monomorphizePremise (name : Name) : ToCanonicalM (Bool × Array (Lean.Expr × Lean.Expr × Name)) := do
   let info ← getConstInfo name
   if (← read).config.monomorphize then
     if (← getAllBinderInfos info.type).contains .instImplicit then
@@ -142,7 +141,7 @@ def monomorphizePremise (name : Name) : ToCanonicalM (Bool × Array (Expr × Exp
       return (true, result)
   return (false, #[(← mkConstWithFreshMVarLevels name, info.type, name)])
 
-def destructPremise (const : Name) (premise : Expr × Expr × Name) (simp : Bool) : ToCanonicalM (Bool × Array (Expr × Expr × Name)) := do
+def destructPremise (const : Name) (premise : Lean.Expr × Lean.Expr × Name) (simp : Bool) : ToCanonicalM (Bool × Array (Lean.Expr × Lean.Expr × Name)) := do
   if !simp && (← read).config.destruct then
     let structures := NameSet.ofArray (Destruct.STRUCTURES ++ (← read).structures)
     let structures := if let .some struct := ← Destruct.getStruct const then structures.erase struct else structures

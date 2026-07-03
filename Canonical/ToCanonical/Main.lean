@@ -14,7 +14,7 @@ public section
 
 /-- Attempt to include a premise of type `type` as a reduction rule, instead of a definiton.
     Returns `true` if successful. -/
-def registerSimpPremise (attribution : String) (type : Expr) : ToCanonicalM Bool := do
+def registerSimpPremise (attribution : String) (type : Lean.Expr) : ToCanonicalM Bool := do
   if (← read).config.simp then
     if let some rule ← toRule #[attribution] type false then
       if ← addConstraints #[rule] then
@@ -49,17 +49,17 @@ def addSimpLemmas : ToCanonicalM Unit := do
           attempted := attempted.insert thm
           let _ ← definePremise thm true
 
-def toCanonical_ (goal : Expr) (premises : Array Name) : ToCanonicalM Typ := do
+def toCanonical_ (goal : Lean.Expr) (premises : Array Name) : ToCanonicalM Canonical.Expr := do
   -- Local Context
-  let lets : Array (Let × Option Typ) := ← withReader (fun ctx => { ctx with polarity := .premise }) do
+  let lets : Array Decl := ← withReader (fun ctx => { ctx with polarity := .premise }) do
     (← getLCtx).foldlM (fun lets decl => do
       if !decl.isAuxDecl then
         let (name, type) ← toHead decl.toExpr
         if let some value := decl.value? then
           let rule := defRule name.toString (← toTerm value type (← typeArity type).params.toList)
-          pure (lets.push ⟨{ name := name.toString, rules := #[rule] }, none⟩)
+          pure (lets.push { name := name.toString, equations := #[rule], type := none})
         else
-          pure (lets.push ⟨{ name := name.toString }, ← toBind decl.fvarId⟩)
+          pure (lets.push { name := name.toString, type := ← toBind decl.fvarId })
       else pure lets
     ) #[]
 
@@ -75,17 +75,14 @@ def toCanonical_ (goal : Expr) (premises : Array Name) : ToCanonicalM Typ := do
   if (← read).config.simp then
     let _ ← addSimpLemmas
 
-  let lets := lets ++ (← get).definitions.toList.toArray.map fun ⟨name, defn⟩ => ({ name, rules := defn.rules }, defn.type.toOption)
+  let lets := lets ++ (← get).definitions.toList.toArray.map fun ⟨name, defn⟩ => { name, equations := defn.rules, type := defn.type.toOption }
 
   let _ ← finalizeMonos
 
-  return { typ with
-    letTypes := lets.map Prod.snd ++ typ.letTypes,
-    lets := lets.map Prod.fst ++ typ.lets
-  }
+  return { typ with lets := lets ++ typ.lets }
 
 /-- Convert `goal` to a `Typ` with `premises` and all included definitions. -/
-def toCanonical (goal : Expr) (premises : Array Name) (structures : Array Name) (config : Config) : MetaM Typ := do
+def toCanonical (goal : Lean.Expr) (premises : Array Name) (structures : Array Name) (config : Config) : MetaM Canonical.Expr := do
   let lctx ← getLCtx
   (((toCanonical_ goal premises).run
     {

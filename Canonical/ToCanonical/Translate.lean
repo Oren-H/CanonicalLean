@@ -14,19 +14,18 @@ public section
 
 mutual
   /-- Convert a type `Expr` `e` to a `Typ`. -/
-  partial def toTyp (e : Expr) : ToCanonicalM Typ := withIncRecDepth do
+  partial def toTyp (e : Lean.Expr) : ToCanonicalM Canonical.Expr := withIncRecDepth do
     forallTelescopeReducing e (whnfType := true) fun xs body => do
-      let params ← xs.mapM (toVar ·)
       let ids := xs.map (·.fvarId!)
       let arities ← ids.mapM (fun id => do pure (id, ← typeArity (← id.getType)))
       withReader (fun ctx => { ctx with arities := ctx.arities.insertMany arities } ) do
         let universal := body.getAppFn.hasAnyFVar (fun x => xs.contains (.fvar x))
-        let paramTypes ← withReader (fun ctx => { ctx with polarity := flip ctx.polarity }) do
-          ids.mapM (fun x => toBind x !universal)
-        return { paramTypes, params, spine := ← toSpine body }
+        let params ← withReader (fun ctx => { ctx with polarity := flip ctx.polarity }) do
+          ids.mapM (fun x => do pure { ← toVar (.fvar x) with type := ← toBind x !universal })
+        return { params, spine := ← toSpine body }
 
   /-- Obtain the `Option Typ` binder type for an `FVarId`. -/
-  partial def toBind (id : FVarId) (inhabited : Bool := true) : ToCanonicalM (Option Typ) := withIncRecDepth do
+  partial def toBind (id : FVarId) (inhabited : Bool := true) : ToCanonicalM (Option Canonical.Expr) := withIncRecDepth do
     if (← id.getType).getAppFnArgs.1 == ``STAR then
       return none
     if (← id.getBinderInfo).isInstImplicit && (← read).config.monomorphize then
@@ -39,7 +38,7 @@ mutual
 
   /-- Translate an `Expr` `e` of type `type` to a `Term`.
       `arities` are the expected parameter arities, `params` accumulate via recursive calls. -/
-  partial def toTerm (e : Expr) (type : Expr) (arities : List Arity) (synthInst : Bool := true) (params : Array Var := #[]) : ToCanonicalM Term := withIncRecDepth do
+  partial def toTerm (e : Lean.Expr) (type : Lean.Expr) (arities : List Arity) (synthInst : Bool := true) (params : Array Decl := #[]) : ToCanonicalM Canonical.Expr := withIncRecDepth do
     match ← withTransparency .all do whnf type with
     | forallE name binderType body info =>
       withLocalDecl name info binderType fun fvar =>
@@ -57,7 +56,7 @@ mutual
       return { params, spine := ← toSpine (← whnf e) synthInst }
 
   /-- Translate an `Expr` `e` without λ bindings to a `Spine`. -/
-  partial def toSpine (e : Expr) (synthInst : Bool := true) : ToCanonicalM Spine := withIncRecDepth do
+  partial def toSpine (e : Lean.Expr) (synthInst : Bool := true) : ToCanonicalM Spine := withIncRecDepth do
     let e ← elimSpecial e
     let e ← if (← read).config.monomorphize then withoutArityUnfold do preprocessMono e else pure e
     withApp e fun fn args => do
@@ -69,7 +68,7 @@ mutual
       return ← addArgs { head := head.toString } type args.toList arity.params.toList synthInst
 
   /-- Apply `args` to `spine` of type `type` with parameter arities `arities`. -/
-  partial def addArgs (spine : Spine) (type : Expr) (args : List Expr) (arities : List Arity) (synthInst : Bool := true) : ToCanonicalM Spine := withIncRecDepth do
+  partial def addArgs (spine : Spine) (type : Lean.Expr) (args : List Lean.Expr) (arities : List Arity) (synthInst : Bool := true) : ToCanonicalM Spine := withIncRecDepth do
     match args with
     | [] => return spine
     | head :: tail =>
@@ -97,7 +96,7 @@ mutual
   /-- Ensure that `name` is in `definitions`. If not, it is added and `onDefine` is called.
       If the current definition of the symbol has no type, evaluate whether to add it,
       and call `onType` after adding a type. -/
-  partial def define (name : String) (type : Expr)
+  partial def define (name : String) (type : Lean.Expr)
     (onDefine : ToCanonicalM Unit := do pure ()) (onType : ToCanonicalM Unit := do pure ()) : ToCanonicalM Arity := withIncRecDepth do
     withReader (fun ctx => { ctx with polarity := .premise }) do
       if !(← get).definitions.contains name then
@@ -206,7 +205,7 @@ mutual
     define name.toString (← getConstInfo name).type (onDefineConst name) (onTypeConst name)
 
   /-- Convert equality `e` to a `Rule`, with given `attribution`. -/
-  partial def toRule (attribution : Array String) (e : Expr) (returnInvalid : Bool := true) : ToCanonicalM (Option Rule) := withIncRecDepth do
+  partial def toRule (attribution : Array String) (e : Lean.Expr) (returnInvalid : Bool := true) : ToCanonicalM (Option Rule) := withIncRecDepth do
     forallTelescopeReducing e fun xs e =>
       (eqOrIff? e).bindM fun ⟨lhs, rhs⟩ => do
         forallTelescopeReducing (← inferType lhs) fun txs _ => do

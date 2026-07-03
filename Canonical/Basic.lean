@@ -8,21 +8,18 @@ namespace Canonical
 
 public section
 
-/-- A variable binding. -/
-structure Var where
-  name: String
-deriving Inhabited, Repr
-
 mutual
   /-- A let binding is a variable binding with reduction rules. -/
-  structure Let extends Var where
-    rules: Array Rule := #[]
+  structure Decl where
+    name: String
+    type: Option Expr := none
+    equations: Array Rule := #[]
   deriving Inhabited, Repr
 
   /-- A spine is an n-ary, η-long application of a head symbol. -/
   structure Spine where
     head: String
-    args: Array Term := #[]
+    args: Array Expr := #[]
 
     /-- For proof reconstruction, the reduction rules applied
         to the type of this spine. -/
@@ -31,9 +28,9 @@ mutual
 
   /-- A term is an n-ary, β-normal, η-long λ expression:
       `λ params lets . spine` -/
-  structure Term where
-    params: Array Var := #[]
-    lets: Array Let := #[]
+  structure Expr where
+    params: Array Decl := #[]
+    lets: Array Decl := #[]
     spine: Spine
 
     /-- For proof reconstruction, the reduction rules applied
@@ -53,26 +50,20 @@ mutual
   deriving Inhabited, Repr
 end
 
-/-- A type is an n-ary Π-type: `Π params lets . toTerm` -/
-structure Typ extends Term where
-  paramTypes: Array (Option Typ) := #[]
-  letTypes: Array (Option Typ) := #[]
-deriving Inhabited, Repr
-
 @[never_extract, extern "spine_to_string"] opaque spineToString: @& Spine → String
 instance : ToString Spine where toString := spineToString
 
-@[never_extract, extern "term_to_string"] opaque termToString: @& Term → String
-instance : ToString Term where toString := termToString
+-- @[never_extract, extern "term_to_string"] opaque termToString: @& Term → String
+-- instance : ToString Term where toString := termToString
 
-@[never_extract, extern "typ_to_string"] opaque typToString: @& Typ → String
-instance : ToString Typ where toString := typToString
+@[never_extract, extern "typ_to_string"] opaque typToString: @& Expr → String
+instance : ToString Expr where toString := typToString
 
 @[never_extract, extern "rule_to_string"] opaque ruleToString: @& Rule → String
 instance : ToString Rule where toString := ruleToString
 
 /-- Saves a JSON representation of the type to the given file. -/
-@[never_extract, extern "save_typ"] opaque save_typ : @& Typ → String → IO Unit
+@[never_extract, extern "save_typ"] opaque save_typ : @& Expr → String → IO Unit
 
 structure Config where
   /-- Canonical produces `count` proofs. -/
