@@ -39,9 +39,12 @@ elab (name := canonicalSeq) "canonical " timeout_syntax:(num)? config:optConfig 
     dbg_trace typ
     return
 
+  let name := ((← Lean.Elab.Term.getDeclName?).map toString).getD "proof"
+  let decl := { type := typ, name }
+
   -- Refinement UI
   if config.refine then
-    let _ ← refine typ
+    let _ ← refine decl
     let (width, indent, column, range) ← widthIndentColumnRange
     let x : WithRpcRef RpcData ← WithRpcRef.mk {
       mctx := ← getMCtx, mainGoal := goal,
@@ -54,7 +57,6 @@ elab (name := canonicalSeq) "canonical " timeout_syntax:(num)? config:optConfig 
     return
 
   let timeout := if let some timeout := timeout_syntax then UInt64.ofNat timeout.getNat else 5
-  let name := ((← Lean.Elab.Term.getDeclName?).map toString).getD "proof"
-  let result ← runCanonical typ name timeout config
+  let result ← runCanonical decl timeout config
   let proofs ← postprocess result processedGoal config reconstruct
   present proofs goal premises_syntax timeout_syntax

@@ -24,13 +24,13 @@ structure CanonicalResult where
 deriving Inhabited
 
 /-- Generate terms of a given type, with given timeout and desired count. -/
-@[never_extract, extern "canonical"] opaque canonical : @& Canonical.Expr → String → UInt64 → USize → IO CanonicalResult
+@[never_extract, extern "canonical"] opaque canonical : @& Decl → UInt64 → USize → IO CanonicalResult
 
 /-- Terminate all invocations of `canonical` that are currently running. -/
 @[never_extract, extern "cancel"] opaque cancel : IO Unit
 
 /-- Start a server with the refinement UI on the given type. -/
-@[never_extract, extern "refine"] opaque refine : @& Canonical.Expr → IO Unit
+@[never_extract, extern "refine"] opaque refine : @& Decl → IO Unit
 
 /-- Get the premises for inclusion, and structures to be unfolded, from the user-supplied list and the premise selector. -/
 def getPremises (goal : MVarId) (consts : Array Name) (config : Config) : MetaM (Array Name × Array Name) := do
@@ -62,9 +62,9 @@ def preprocess (goal : MVarId) (config : Config) (structs : Array Name) : MetaM 
   return (goal, pure)
 
 /-- Run Canonical asynchronously, so that we can check for cancellation. -/
-def runCanonical (typ : Canonical.Expr) (name : String) (timeout : UInt64) (config : Config) : MetaM CanonicalResult := do
+def runCanonical (decl : Decl) (timeout : UInt64) (config : Config) : MetaM CanonicalResult := do
   checkInterrupted
-  let task ← IO.asTask (prio := .dedicated) (canonical typ name timeout config.count)
+  let task ← IO.asTask (prio := .dedicated) (canonical decl timeout config.count)
   while !(← IO.hasFinished task) do
     if ← interrupted then
       cancel
