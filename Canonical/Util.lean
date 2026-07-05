@@ -197,3 +197,13 @@ def getRelevantSimpTheorems (constSet : NameSet) : MetaM (Array Name) := do
         else pure false
       else pure false
   pure (relevant.flatMap fun x => SIMP_HARD_CODE.getD x #[x])
+
+def leanString (expr : Expr) (tactic : Bool) (width : Nat := 1000000) (indent : Nat := 0) (column : Nat := 0) : MetaM String :=
+  withOptions applyOptions do
+    let tm ← TryThis.delabToRefinableSyntax expr
+    let fmt ← if tactic then
+      let stx ← if expr.hasMVar then `(tactic| refine $tm) else `(tactic| exact $tm)
+      PrettyPrinter.ppCategory `tactic stx
+    else
+      PrettyPrinter.ppCategory `term tm
+    return fmt.pretty width indent column
