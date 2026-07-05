@@ -410,16 +410,16 @@ export default function (props) {
         React.createElement(
           'div',
           { style: { flex: '4 1 0', minWidth: '360px' } },
-          LeanInput({ focused: false, text: type, setText: setType, placeholder: "type" })
+          React.createElement(LeanInput, { focused: false, text: type, setText: setType, placeholder: "type" })
         ),
         React.createElement(
           'div',
           { style: { flex: '1 1 0', minWidth: '120px' } },
-          LeanInput({ focused: false, text: name, setText: setName, placeholder: "name" })
+          React.createElement(LeanInput, { focused: false, text: name, setText: setName, placeholder: "name" })
         )
       ),
 
-      LeanInput({ focused: false, text: clear, setText: setClear, placeholder: "clear" })
+      React.createElement(LeanInput, { focused: false, text: clear, setText: setClear, placeholder: "clear" })
     ),
     React.createElement('div', {
         onKeyDown: e => {
@@ -430,7 +430,7 @@ export default function (props) {
         },
         style: { padding: '50px 0 10px 0', width: '100%' }
       },
-      LeanInput({ focused: false, text: overrideText, setText: setOverrideText, placeholder: "override" })
+      React.createElement(LeanInput, { focused: false, text: overrideText, setText: setOverrideText, placeholder: "override" })
     ),
     React.createElement(
       'div',
