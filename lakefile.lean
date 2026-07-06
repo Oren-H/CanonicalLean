@@ -29,3 +29,8 @@ lean_lib Canonical where
 
 @[test_driver]
 lean_lib Test
+
+/-- Programming-by-example interface (`#synthesize`); see `Program Synthesis/ProgramByExample.md`. -/
+lean_lib ProgramByExample where
+  srcDir := "Program Synthesis"
+  roots := #[`ProgramByExample, `ProgramByExample.Examples]
