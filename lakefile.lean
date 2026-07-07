@@ -34,3 +34,8 @@ lean_lib Test
 lean_lib ProgramByExample where
   srcDir := "Program Synthesis"
   roots := #[`ProgramByExample, `ProgramByExample.Examples]
+
+/-- Programming-by-predicate interface (`#synthesize_pred`); see `Program Synthesis/ProgramByPredicate.md`. -/
+lean_lib ProgramByPredicate where
+  srcDir := "Program Synthesis"
+  roots := #[`ProgramByPredicate, `ProgramByPredicate.Examples]
