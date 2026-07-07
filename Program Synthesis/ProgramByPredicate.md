@@ -28,6 +28,22 @@ On success, the command logs the instantiated example equations and reports
 `Try this: def pred : Nat → Nat := fun a => …`; clicking the suggestion replaces
 the `#synthesize_pred` command with the definition.
 
+Because the equations only *sample* the predicates, the command then attempts to
+**prove** each predicate about the synthesized function (with the same timeout
+per predicate). Every proof found is appended to the suggestion as a `theorem`:
+
+```lean
+def pred : Nat → Nat := fun a ↦ Nat.rec (motive := fun t ↦ Nat) a (fun n n_ih ↦ n) a
+theorem pred_spec_1 : pred 0 = 0 := Eq.refl Nat.zero
+theorem pred_spec_2 : ∀ n : Nat, pred (n + 1) = n := fun n ↦ Eq.refl n
+```
+
+(`f_spec` if there is a single predicate, `f_spec_<i>` numbered in clause order
+otherwise). Each predicate that could not be proved produces a warning: the
+definition is then only guaranteed to satisfy the instantiated equations, not
+the predicate itself — either because the search timed out, or because the
+function genuinely does not satisfy it.
+
 Each clause is a (possibly) universally quantified equation whose left-hand side
 is an application of the function under synthesis; both sides may mention the
 function. A clause without binders is an ordinary input–output example, so
@@ -79,8 +95,26 @@ Implementation: `ProgramByPredicate.lean` (command `#synthesize_pred`, namespace
 5. **Search**: the equations are handed to `Canonical.PBE.toProblem` — the same
    backend as `#synthesize` — which translates the signature and the equations
    in a single `ToCanonicalM` run and attaches them as `equations` of the goal
-   `Decl`; then `runCanonical`, `fromCanonical`, verification against the
-   instantiated equations, and a `def` suggestion via `TryThis`.
+   `Decl`; then `runCanonical`, `fromCanonical`, and verification against the
+   instantiated equations.
+6. **Prove the predicates** about the found candidate (`prove`). The candidate
+   is let-bound under the function's name in place of the opaque local `f`
+   (`withLetDecl`), so its defining equation reaches the solver as a reduction
+   rule and found proofs delaborate referring to the function *by name*; the
+   proposition — the predicate restated about the let binding — is handed to
+   the ordinary Canonical tactic pipeline (`getPremises → preprocess →
+   toCanonical → runCanonical → postprocess`) with the user-supplied premises
+   and timeout. A found proof is delaborated and re-elaborated against the
+   statement (`elaboratesAgainst`) — reconstructed proofs may embed `simp only`
+   attributions that only make sense as syntax, and delaboration need not
+   round-trip — and, if it survives, becomes a `theorem f_spec…` in the
+   suggestion; once the suggestion is applied, the name resolves to the
+   suggested `def`, which is definitionally equal to the let binding the proof
+   was checked against. Predicates whose proof search fails, times out, or does
+   not re-elaborate produce a warning instead.
+7. **Suggest** via `TryThis`: the `def` alone if nothing was proved, otherwise
+   the `def` followed by the proved `theorem`s as a single multi-command
+   suggestion.
 
 ## Design decisions
 
@@ -100,11 +134,18 @@ Implementation: `ProgramByPredicate.lean` (command `#synthesize_pred`, namespace
 
 ## Limitations / future work
 
-- **Predicates are only sampled.** The synthesized function provably satisfies
-  the instantiated equations, not the predicates themselves: from
+- **Verification is best-effort.** A predicate that resists proof within the
+  timeout only yields a warning — it does not distinguish "the proof search
+  timed out" from "the function does not satisfy the predicate". From
   `∀ n m, f n m = f m n` alone with few examples, the solver may return a
-  function that is not commutative. Increase `(examples := n)` to constrain the
-  search further, or verify the result with the `canonical` tactic afterwards.
+  function that is not commutative (the `comm` smoke test does exactly this,
+  and its warning is expected); increase `(examples := n)` to constrain the
+  search further. Conversely, a true predicate may need a proof (e.g. by
+  induction) that Canonical does not find within the timeout — increase the
+  timeout or prove it manually.
+- **Proof attempts cost time.** Each predicate gets its own proof search with
+  the command's timeout, so the worst case adds `timeout × #predicates` per
+  candidate on top of the synthesis search.
 - **No dependent quantification.** Binder types must be closed types; `∀ (n :
   Nat) (h : n ≤ 2), …` is rejected. (A closed `Prop` binder is accepted — its
   "examples" are proofs found by Canonical — but this is untested territory.)
