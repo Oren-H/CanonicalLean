@@ -17,9 +17,11 @@ themselves enumerated by Canonical, using its `count` option on the binder
 types — and the resulting ground equations become equational constraints on
 the declaration under synthesis, exactly as in `#synthesize` (see
 `ProgramByExample.lean`). Once a function is found, the command attempts to
-*prove* each predicate about it; found proofs are suggested as `theorem`s
-alongside the `def`, and predicates that could not be proved produce a
-warning. See `ProgramByPredicate.md` for the design. -/
+*prove* each predicate about it — about the suggested definition itself,
+recursors already rendered as pattern matching, so the solver works with its
+match-form equations rather than the raw recursor term; found proofs are
+suggested as `theorem`s alongside the `def`, and predicates that could not be
+proved produce a warning. See `ProgramByPredicate.md` for the design. -/
 
 /-! ## Term enumeration
 
@@ -194,9 +196,17 @@ def dedupExamples (examples : Array Lean.Expr) : Array Lean.Expr := Id.run do
 The instantiated equations only *sample* each predicate, so a function that
 satisfies all of them need not satisfy the predicates themselves. After the
 search succeeds, we therefore attempt to prove each predicate about the
-synthesized function: the candidate is let-bound under the function's name,
-the predicate is restated about that binding, and the resulting proposition
-is handed to the ordinary Canonical tactic pipeline. -/
+synthesized function. The recursor→match conversion happens *before* these
+proof attempts: the suggested `def` — recursors already rendered as pattern
+matching by `R2M.mkDefCommand` — is elaborated in a sandboxed copy of the
+command state, each predicate is restated about the new constant, and the
+resulting proposition is handed to the ordinary Canonical tactic pipeline.
+The solver then sees the function through the definition's match-form
+equation lemmas (`f n 0 = n`, `f n (k+1) = (f n k).succ`, …) instead of a
+single reduction rule to the raw recursor term, which it is better at proving
+with. If the suggested definition cannot be elaborated (or the candidate
+cannot leave its elaboration context), the candidate is let-bound under the
+function's name and the proofs run against that binding, as before. -/
 
 /-- Attempt to prove the proposition `prop` with Canonical, driving the same
     pipeline as the `canonical` tactic (`getPremises → preprocess →
@@ -256,6 +266,111 @@ def delabProof (proof stmt : Lean.Expr) : Term.TermElabM (Option (TSyntax `term)
   if ← elaboratesAgainst stx stmt then return some stx
   return none
 
+/-- Attempt to prove `stmt` — one predicate restated about the definition under
+    test — first by `Eq.refl`, then with the solver. Returns the delaborated
+    proof, or a warning explaining why none survived. -/
+def proveOne (stmt : Lean.Expr) (thmName : Name) (consts : Array Name)
+    (timeout : UInt64) (fname : Name) :
+    Term.TermElabM (Option (TSyntax `term) × Option MessageData) := do
+  -- A definitionally true predicate needs no search: prove it with `Eq.refl`
+  -- directly. Failing that, fall through to the solver.
+  let rfl? ← try rflProof? stmt
+    catch ex => if ex.isInterrupt || ex.isRuntime then throw ex else pure none
+  if let some proof := rfl? then
+    if let some stx ← delabProof proof stmt then
+      return (some stx, none)
+  let proof? ← try
+      prove thmName.toString stmt consts timeout
+    catch ex =>
+      if ex.isInterrupt || ex.isRuntime then throw ex
+      return (none, some m!"the attempt to prove this predicate about the \
+        synthesized function failed:{indentD ex.toMessageData}")
+  let some proof := proof?
+    | return (none, some m!"found no proof that the synthesized function \
+        satisfies this predicate; increase the timeout with \
+        `#synthesize_pred {timeout.toNat * 2} {fname} : …` to search longer")
+  if let some stx ← delabProof proof stmt then
+    return (some stx, none)
+  return (none, some m!"a proof that the synthesized function satisfies this \
+    predicate was found, but it does not re-elaborate and was \
+    discarded:{indentD (← PrettyPrinter.delab proof)}")
+
+/-- Attempt to prove each predicate — `(t, stmt)` pairs the clause syntax with
+    the statement about the definition under test. Returns the `theorem`
+    commands for the proofs found and, for each predicate that resisted, its
+    clause syntax paired with the warning. -/
+def provePredicates (preds : Array (Term × Lean.Expr)) (consts : Array Name)
+    (timeout : UInt64) (fname : Name) :
+    Term.TermElabM (Array (TSyntax `command) × Array (Term × MessageData)) := do
+  let mut thmCmds := #[]
+  let mut warnings := #[]
+  let mut i := 0
+  for (t, stmt) in preds do
+    i := i + 1
+    let thmName := fname.appendAfter (if preds.size == 1 then "_spec" else s!"_spec_{i}")
+    let (proofStx?, warning?) ← proveOne stmt thmName consts timeout fname
+    if let some warning := warning? then
+      warnings := warnings.push (t, warning)
+    if let some proofStx := proofStx? then
+      let thmNameId := mkIdent thmName
+      thmCmds := thmCmds.push
+        (← `(command| theorem $thmNameId:ident : $t:term := $proofStx:term))
+  return (thmCmds, warnings)
+
+/-- The warning for a predicate that resisted proof: the definition is then
+    only guaranteed to satisfy the instantiated equations, not the predicate. -/
+def predWarning (fname : Name) (w : MessageData) : MessageData :=
+  m!"{w}\nthe definition `{fname}` is only guaranteed to satisfy the \
+    instantiated example equations, not this predicate"
+
+/-- Prove the predicates about `candidate` let-bound under `fname` in place of
+    the opaque local `f` — the fallback when the suggested definition itself is
+    not available to prove against. The binding's defining equation reaches the
+    solver as a single reduction rule to the raw term, and found proofs
+    delaborate referring to the function by name. Logs the warnings; returns
+    the `theorem` commands. -/
+def provePredicatesLetBound (fname : Name) (type candidate f : Lean.Expr)
+    (preds : Array (Term × Lean.Expr)) (consts : Array Name) (timeout : UInt64) :
+    Term.TermElabM (Array (TSyntax `command)) := do
+  withLCtx ((← getLCtx).erase f.fvarId!) (← getLocalInstances) do
+    withLetDecl fname type candidate fun fc => do
+      let preds := preds.map fun (t, e) => (t, e.replaceFVar f fc)
+      let (thmCmds, warnings) ← provePredicates preds consts timeout fname
+      for (t, warning) in warnings do
+        logWarningAt t (predWarning fname warning)
+      return thmCmds
+
+/-- Prepare `candidate` to survive outside the current elaboration context:
+    Canonical does not translate universe levels, so the reconstruction carries
+    unassigned level metavariables, which `check` pins by unification. Returns
+    `none` if metavariables (or stray local variables) remain. -/
+def pinCandidate? (candidate : Lean.Expr) : MetaM (Option Lean.Expr) := do
+  try
+    check candidate
+    let c ← instantiateMVars candidate
+    if c.hasExprMVar || c.hasLevelMVar || c.hasFVar then return none
+    return some c
+  catch ex =>
+    if ex.isInterrupt || ex.isRuntime then throw ex
+    return none
+
+/-- Emit the suggestion: the `def` alone if nothing was proved, otherwise the
+    `def` followed by the proved `theorem`s as a single multi-command string. -/
+def emitSuggestion (ref : Syntax) (defCmd : TSyntax `command)
+    (thmCmds : Array (TSyntax `command)) : Term.TermElabM Unit := do
+  if thmCmds.isEmpty then
+    TryThis.addSuggestion ref defCmd
+  else
+    let text := "\n".intercalate (← (#[defCmd] ++ thmCmds).toList.mapM fun cmd =>
+      return (← PrettyPrinter.ppCommand cmd).pretty)
+    TryThis.addSuggestion ref { suggestion := .string text }
+
+/-- The number of error messages in `log`, reported or not. Comparing counts
+    before and after a nested `elabCommand` detects whether it errored. -/
+def errorCount (log : MessageLog) : Nat :=
+  log.reportedPlusUnreported.foldl
+    (fun n msg => if msg.severity matches .error then n + 1 else n) 0
+
 /-! ## The command -/
 
 /-- Extra constants made available to the search, as in `canonical [foo, bar]`. -/
@@ -274,7 +389,9 @@ syntax pbpPredicate := "| " term
     inputs enumerated by Canonical for the quantified variables, and the
     resulting example equations constrain the search exactly as in
     `#synthesize`. Once a function is found, the command attempts to prove
-    each predicate about it (with the same timeout per predicate): proofs
+    each predicate about it (with the same timeout per predicate) — about the
+    suggested definition itself, recursors already rendered as pattern
+    matching, elaborated in a sandboxed command state: proofs
     found are suggested as `theorem f_spec…` declarations alongside the
     `def`, and every predicate that could not be proved produces a warning —
     the function then only provably satisfies the instantiated equations. An
@@ -284,7 +401,20 @@ syntax pbpPredicate := "| " term
     (`#synthesize_pred [Nat.add] g : …`). -/
 elab (name := synthesizePredCmd) "#synthesize_pred " timeout?:(num)? examples?:(pbpExamples)?
     premises?:(pbpPremises)? fnameId:ident " : " sig:term preds:pbpPredicate* : command => do
-  Command.runTermElabM fun _ => do
+  let ref ← getRef
+  let fname := fnameId.getId
+  let timeout : UInt64 := if let some t := timeout? then UInt64.ofNat t.getNat else 5
+  let predTerms : Array Term ← preds.mapM fun predStx => do
+    let `(pbpPredicate| | $t:term) := predStx | throwUnsupportedSyntax
+    pure t
+
+  -- Phase 1, in the term elaborator: elaborate and validate the input,
+  -- instantiate the predicates with enumerated example equations, search, and
+  -- build each candidate's `def` suggestion (recursors rendered as pattern
+  -- matching by `R2M.mkDefCommand`). Candidates that can leave this
+  -- elaboration context are deferred to phase 2 below, which proves the
+  -- predicates about the suggested definition itself.
+  let (deferred, consts) ← Command.runTermElabM fun _ => do
     let consts ← if let some prems := premises? then
         match prems with
         | `(pbpPremises| [$args,*]) => args.getElems.raw.mapM resolveGlobalConstNoOverload
@@ -298,7 +428,6 @@ elab (name := synthesizePredCmd) "#synthesize_pred " timeout?:(num)? examples?:(
     if k == 0 then
       throwError "the number of examples per predicate must be positive"
     let config : Config := { destruct := false }
-    let fname := fnameId.getId
 
     let type ← Term.elabType sig
     Term.synthesizeSyntheticMVarsNoPostponing
@@ -308,8 +437,7 @@ elab (name := synthesizePredCmd) "#synthesize_pred " timeout?:(num)? examples?:(
 
     withLocalDeclD fname type fun f => do
       -- Elaborate and validate the predicate clauses.
-      let predicates ← preds.mapM fun predStx => do
-        let `(pbpPredicate| | $t:term) := predStx | throwUnsupportedSyntax
+      let predicates ← predTerms.mapM fun (t : Term) => do
         let e ← Term.elabTermEnsuringType t (some (mkSort .zero))
         Term.synthesizeSyntheticMVarsNoPostponing
         let e ← instantiateMVars e
@@ -354,7 +482,6 @@ elab (name := synthesizePredCmd) "#synthesize_pred " timeout?:(num)? examples?:(
       let decl ← withArityUnfold config.monomorphize do
         PBE.toProblem fname.toString f type examples consts config
 
-      let timeout : UInt64 := if let some t := timeout? then UInt64.ofNat t.getNat else 5
       let result ← runCanonical decl timeout config
 
       let terms ← withArityUnfold config.monomorphize do
@@ -366,62 +493,76 @@ elab (name := synthesizePredCmd) "#synthesize_pred " timeout?:(num)? examples?:(
           or supply premises with `#synthesize_pred [name, …] {fname} : …`"
 
       withOptions applyOptions do
+        let mut deferred : Array ((TSyntax `command) × Lean.Expr) := #[]
         for candidate in terms do
           for ex in examples do
             unless ← PBE.satisfiesExample f candidate ex do
               logWarning m!"the synthesized term{indentExpr candidate}\ndoes not satisfy \
                 the instantiated example `{ex}`"
           let defCmd ← R2M.mkDefCommand fnameId sig f candidate type
+          match ← pinCandidate? candidate with
+          | some pinned =>
+            deferred := deferred.push (defCmd, pinned)
+          | none =>
+            -- The candidate cannot leave this elaboration context; prove the
+            -- predicates about it let-bound under the function's name here.
+            let thmCmds ← provePredicatesLetBound fname type candidate f
+              (predicates.map fun (t, e, _, _) => (t, e)) consts timeout
+            emitSuggestion ref defCmd thmCmds
+        return (deferred, consts)
 
-          -- Attempt to prove each predicate about the candidate. The candidate
-          -- is let-bound under the function's name in place of the opaque
-          -- local `f`, so its defining equation is available to the proof
-          -- search as a reduction rule, and a found proof delaborates
-          -- referring to the function by name — which, once the suggestion is
-          -- applied, resolves to the suggested `def` (definitionally equal to
-          -- the let binding).
-          let mut thmCmds : Array (TSyntax `command) := #[]
-          let mut i := 0
-          for (t, e, _, _) in predicates do
-            i := i + 1
-            let thmName := fname.appendAfter (if predicates.size == 1 then "_spec" else s!"_spec_{i}")
-            let (proofStx?, warning?) ← withLCtx ((← getLCtx).erase f.fvarId!) (← getLocalInstances) do
-              withLetDecl fname type candidate fun fc => do
-                let stmt := e.replaceFVar f fc
-                -- A definitionally true predicate needs no search: prove it
-                -- with `Eq.refl` directly. Failing that, fall through to the
-                -- solver.
-                let rfl? ← try rflProof? stmt
-                  catch ex => if ex.isInterrupt || ex.isRuntime then throw ex else pure none
-                if let some proof := rfl? then
-                  if let some stx ← delabProof proof stmt then
-                    return (some stx, none)
-                let proof? ← try
-                    prove thmName.toString stmt consts timeout
-                  catch ex =>
-                    if ex.isInterrupt || ex.isRuntime then throw ex
-                    return (none, some m!"the attempt to prove this predicate about the \
-                      synthesized function failed:{indentD ex.toMessageData}")
-                let some proof := proof?
-                  | return (none, some m!"found no proof that the synthesized function \
-                      satisfies this predicate; increase the timeout with \
-                      `#synthesize_pred {timeout.toNat * 2} {fname} : …` to search longer")
-                if let some stx ← delabProof proof stmt then
-                  return (some stx, none)
-                return (none, some m!"a proof that the synthesized function satisfies this \
-                  predicate was found, but it does not re-elaborate and was \
-                  discarded:{indentD (← PrettyPrinter.delab proof)}")
-            if let some warning := warning? then
-              logWarningAt t m!"{warning}\nthe definition `{fname}` is only guaranteed to \
-                satisfy the instantiated example equations, not this predicate"
-            if let some proofStx := proofStx? then
-              let thmNameId := mkIdent thmName
-              thmCmds := thmCmds.push
-                (← `(command| theorem $thmNameId:ident : $t:term := $proofStx:term))
-
-          if thmCmds.isEmpty then
-            TryThis.addSuggestion (← getRef) defCmd
-          else
-            let text := "\n".intercalate (← (#[defCmd] ++ thmCmds).toList.mapM fun cmd =>
-              return (← PrettyPrinter.ppCommand cmd).pretty)
-            TryThis.addSuggestion (← getRef) { suggestion := .string text }
+  -- Phase 2, per candidate: elaborate the suggested definition in a sandboxed
+  -- copy of the command state, so the predicates are proved about the function
+  -- *as suggested* — the solver sees its match-form equation lemmas rather
+  -- than a reduction rule to the raw recursor term — then roll the state back
+  -- and report. Found proofs delaborate referring to the function by name,
+  -- which, once the suggestion is applied, resolves to the pasted `def`.
+  for (defCmd, candidate) in deferred do
+    let saved ← get
+    let proved? ←
+      try
+        Command.elabCommand defCmd
+        if errorCount (← get).messages > errorCount saved.messages then
+          pure none
+        else
+          some <$> Command.runTermElabM fun _ => withOptions applyOptions do
+            let declName ← resolveGlobalConstNoOverload fnameId
+            let some info := (← getEnv).find? declName
+              | throwError "the suggested definition was not elaborated"
+            if info.value?.any (·.hasSorry) then
+              throwError "the suggested definition elaborated with errors"
+            let preds ← predTerms.mapM fun (t : Term) => do
+              let stmt ← Term.elabTermEnsuringType t (some (mkSort .zero))
+              Term.synthesizeSyntheticMVarsNoPostponing
+              pure (t, ← instantiateMVars stmt)
+            let (thmCmds, warnings) ← provePredicates preds consts timeout fname
+            -- The sandbox is about to be rolled back: render the warnings
+            -- while their context still exists.
+            let warnings ← warnings.mapM fun (t, w) =>
+              return (t, ← (← addMessageContext w).format)
+            pure (thmCmds, warnings)
+      catch ex =>
+        if ex.isInterrupt || ex.isRuntime then
+          set saved
+          throw ex
+        pure none
+    set saved
+    match proved? with
+    | some (thmCmds, warnings) =>
+      for (t, warning) in warnings do
+        logWarningAt t (predWarning fname m!"{warning}")
+      Command.liftTermElabM <| emitSuggestion ref defCmd thmCmds
+    | none =>
+      -- The suggested definition did not elaborate here (e.g. a name clash):
+      -- fall back to proving the predicates about the let-bound raw term.
+      Command.runTermElabM fun _ => withOptions applyOptions do
+        let type ← Term.elabType sig
+        Term.synthesizeSyntheticMVarsNoPostponing
+        let type ← instantiateMVars type
+        withLocalDeclD fname type fun f => do
+          let preds ← predTerms.mapM fun (t : Term) => do
+            let stmt ← Term.elabTermEnsuringType t (some (mkSort .zero))
+            Term.synthesizeSyntheticMVarsNoPostponing
+            pure (t, ← instantiateMVars stmt)
+          let thmCmds ← provePredicatesLetBound fname type candidate f preds consts timeout
+          emitSuggestion ref defCmd thmCmds

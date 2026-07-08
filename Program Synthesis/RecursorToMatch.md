@@ -18,8 +18,12 @@ def add : Nat → Nat → Nat
   | a, Nat.succ n => (add a n).succ
 ```
 
-The conversion applies only to the display paths of `#synthesize` and
-`#synthesize_pred`; the `canonical` tactic's suggestions are unchanged.
+The conversion applies only to `#synthesize` and `#synthesize_pred`; the
+`canonical` tactic's suggestions are unchanged. In `#synthesize_pred` the
+converted definition is more than display: it is elaborated in a sandboxed
+command state and the predicate proofs are attempted *about it*, so the solver
+works with its match-form equation lemmas (see `ProgramByPredicate.md`,
+step 6).
 
 ## Interface
 

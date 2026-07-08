@@ -2,9 +2,11 @@ import ProgramByPredicate
 
 /-! Smoke tests for `#synthesize_pred`. Elaborating this file runs real searches;
 a "No function found" outcome is an elaboration error and fails the build.
-After synthesis, each command attempts to prove its predicates about the found
-function; proved predicates appear as `theorem`s in the suggestion, unproved
-ones produce a warning (the `comm` test below is expected to warn). -/
+After synthesis, each command attempts to prove its predicates about the
+suggested definition itself — elaborated in a sandboxed command state, with
+recursors already rendered as pattern matching; proved predicates appear as
+`theorem`s in the suggestion, unproved ones produce a warning (the `comm` test
+below is expected to warn). -/
 
 -- First projection, from a single universally quantified predicate over two
 -- variables. The instantiated equations are `proj 0 0 = 0`, `proj 0 1 = 0`,

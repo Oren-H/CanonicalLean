@@ -30,7 +30,10 @@ the `#synthesize_pred` command with the definition.
 
 Because the equations only *sample* the predicates, the command then attempts to
 **prove** each predicate about the synthesized function (with the same timeout
-per predicate). Every proof found is appended to the suggestion as a `theorem`:
+per predicate) — about the *suggested definition itself*, elaborated in a
+sandboxed command state, so the solver works with its match-form equations
+rather than the raw recursor term (see step 6). Every proof found is appended
+to the suggestion as a `theorem`:
 
 ```lean
 def pred : Nat → Nat := fun a ↦
@@ -67,7 +70,8 @@ warning.
 ## How it works
 
 Implementation: `ProgramByPredicate.lean` (command `#synthesize_pred`, namespace
-`Canonical.PBP`). Pipeline, all inside `runTermElabM`:
+`Canonical.PBP`). Pipeline — steps 1–5 inside one `runTermElabM`, step 6 driven
+from the command level, where the suggested definition can be elaborated:
 
 1. **Elaborate the signature** `T`, introduce the function as a local variable
    (`withLocalDeclD f T`), and elaborate each clause against expected type
@@ -103,25 +107,36 @@ Implementation: `ProgramByPredicate.lean` (command `#synthesize_pred`, namespace
    in a single `ToCanonicalM` run and attaches them as `equations` of the goal
    `Decl`; then `runCanonical`, `fromCanonical`, and verification against the
    instantiated equations.
-6. **Prove the predicates** about the found candidate. The candidate is
-   let-bound under the function's name in place of the opaque local `f`
-   (`withLetDecl`), so its defining equation reaches the solver as a reduction
-   rule and found proofs delaborate referring to the function *by name*.
-   Definitionally true predicates are proved directly with `Eq.refl`
-   (`rflProof?`), without invoking the solver — this also rescues specs like
-   `comm 1 1 = 2` whose solver reconstruction routes through propositional
-   rewrites (e.g. `Nat.succ.injEq`) that do not re-elaborate as tactics.
-   Otherwise the proposition — the predicate restated about the let binding —
-   is handed to the ordinary Canonical tactic pipeline (`prove`:
+6. **Prove the predicates** — about the definition *as suggested*, so the
+   recursor→match conversion happens **before** any proof is attempted. The
+   `def` built from the candidate by `R2M.mkDefCommand` (recursors already
+   rendered as pattern matching) is elaborated in a sandboxed copy of the
+   command state, and each predicate is restated about the new constant. The
+   solver then sees the function through its match-form equation lemmas
+   (`f n 0 = n`, `f n (k+1) = (f n k).succ`, …) rather than as a single
+   reduction rule to the raw recursor term — rules it is far better at
+   proving with; induction proofs typically rewrite with `f.eq_1`/`f.eq_2`,
+   which the pasted definition realizes on demand. Definitionally true
+   predicates are proved directly with `Eq.refl` (`rflProof?`), without
+   invoking the solver — this also rescues specs like `comm 1 1 = 2` whose
+   solver reconstruction routes through propositional rewrites (e.g.
+   `Nat.succ.injEq`) that do not re-elaborate as tactics. Otherwise the
+   proposition is handed to the ordinary Canonical tactic pipeline (`prove`:
    `getPremises → preprocess → toCanonical → runCanonical → postprocess`)
-   with the user-supplied premises and timeout. A found proof is delaborated and re-elaborated against the
-   statement (`elaboratesAgainst`) — reconstructed proofs may embed `simp only`
-   attributions that only make sense as syntax, and delaboration need not
-   round-trip — and, if it survives, becomes a `theorem f_spec…` in the
-   suggestion; once the suggestion is applied, the name resolves to the
-   suggested `def`, which is definitionally equal to the let binding the proof
-   was checked against. Predicates whose proof search fails, times out, or does
-   not re-elaborate produce a warning instead.
+   with the user-supplied premises and timeout. A found proof is delaborated
+   and re-elaborated against the statement (`elaboratesAgainst`) —
+   reconstructed proofs may embed `simp only` attributions that only make
+   sense as syntax, and delaboration need not round-trip — and, if it
+   survives, becomes a `theorem f_spec…` in the suggestion; proofs refer to
+   the function by name, which, once the suggestion is applied, resolves to
+   the pasted `def` — the very definition they were checked against. The
+   sandbox is rolled back before the suggestion is emitted, so the definition
+   does not leak into the environment. If the suggested definition cannot be
+   elaborated (a name clash, say), or the candidate carries universe
+   metavariables that `Meta.check` cannot pin, the candidate is let-bound
+   under the function's name instead (`withLetDecl`) and the proofs run
+   against that binding, as before. Predicates whose proof search fails,
+   times out, or does not re-elaborate produce a warning either way.
 7. **Suggest** via `TryThis`: the `def` alone if nothing was proved, otherwise
    the `def` followed by the proved `theorem`s as a single multi-command
    suggestion.
@@ -141,6 +156,11 @@ Implementation: `ProgramByPredicate.lean` (command `#synthesize_pred`, namespace
   predicate such as commutativity loses its diagonal and mirror-image
   instantiations to the trivial/duplicate filter, so it contributes fewer
   equations than `k`.
+- **The recursor→match conversion runs before the proof attempts.** The
+  predicates are proved about the suggested definition, not the raw candidate:
+  Canonical is markedly more capable when the function reaches it as
+  match-form equation lemmas than as a delta rule to a recursor term, and the
+  proofs are then checked against exactly the definition the user pastes.
 
 ## Limitations / future work
 
