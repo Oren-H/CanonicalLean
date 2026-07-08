@@ -39,3 +39,8 @@ lean_lib ProgramByExample where
 lean_lib ProgramByPredicate where
   srcDir := "Program Synthesis"
   roots := #[`ProgramByPredicate, `ProgramByPredicate.Examples]
+
+/-- Recursor-application → `match`-syntax rendering for synthesis suggestions; see `Program Synthesis/RecursorToMatch.md`. -/
+lean_lib RecursorToMatch where
+  srcDir := "Program Synthesis"
+  roots := #[`RecursorToMatch, `RecursorToMatch.Examples]

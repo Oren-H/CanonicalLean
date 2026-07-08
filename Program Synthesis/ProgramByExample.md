@@ -71,7 +71,9 @@ Implementation: `ProgramByExample.lean` (command `#synthesize`, namespace
    branch of the FFI reads the full `Decl`, equations included.
 5. **Search** with `runCanonical` (cancellable, honors the timeout).
 6. **Reconstruct** each returned term with `fromCanonical`, verify it against the
-   examples, and present `def f : T := …` via `TryThis`.
+   examples, and present `def f : T := …` via `TryThis`. Recursor applications in
+   the suggestion are rendered as pattern matching — definition-level equations,
+   inline `match`, or `let rec` — by `R2M.mkDefCommand`; see `RecursorToMatch.md`.
 
 ## Design decisions
 

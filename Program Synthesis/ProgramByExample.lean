@@ -10,6 +10,7 @@ public meta import Canonical.ToCanonical.Main
 public meta import Canonical.Main
 public meta import Canonical.FromCanonical
 public meta import Canonical.Symbols
+public meta import RecursorToMatch
 
 open Lean Parser Tactic Meta Elab Tactic Core Monomorphize
 
@@ -182,6 +183,5 @@ elab (name := synthesizeCmd) "#synthesize " timeout?:(num)? premises?:(pbePremis
           for ex in examples do
             unless ← satisfiesExample f t ex do
               logWarning m!"the synthesized term{indentExpr t}\ndoes not satisfy the example `{ex}`"
-          let body ← PrettyPrinter.delab t
-          let cmd ← `(command| def $fnameId:ident : $sig:term := $body:term)
+          let cmd ← R2M.mkDefCommand fnameId sig f t type
           TryThis.addSuggestion (← getRef) cmd

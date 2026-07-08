@@ -33,10 +33,16 @@ Because the equations only *sample* the predicates, the command then attempts to
 per predicate). Every proof found is appended to the suggestion as a `theorem`:
 
 ```lean
-def pred : Nat → Nat := fun a ↦ Nat.rec (motive := fun t ↦ Nat) a (fun n n_ih ↦ n) a
+def pred : Nat → Nat := fun a ↦
+  match a with
+  | Nat.zero => a
+  | Nat.succ n => n
 theorem pred_spec_1 : pred 0 = 0 := Eq.refl Nat.zero
 theorem pred_spec_2 : ∀ n : Nat, pred (n + 1) = n := fun n ↦ Eq.refl n
 ```
+
+(Recursor applications in the suggestion are rendered as pattern matching by
+`R2M.mkDefCommand`/`delabProof`; see `RecursorToMatch.md`.)
 
 (`f_spec` if there is a single predicate, `f_spec_<i>` numbered in clause order
 otherwise). Each predicate that could not be proved produces a warning: the

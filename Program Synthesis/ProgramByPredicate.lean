@@ -244,6 +244,18 @@ def elaboratesAgainst (stx : TSyntax `term) (stmt : Lean.Expr) : Term.TermElabM 
     if ex.isInterrupt || ex.isRuntime then throw ex
     return false
 
+/-- Delaborate `proof`, preferring the recursor→match rendering, keeping a
+    rendering only if it re-elaborates against `stmt`; a suggestion that was
+    trustworthy before the conversion stays trustworthy after it. -/
+def delabProof (proof stmt : Lean.Expr) : Term.TermElabM (Option (TSyntax `term)) := do
+  let stx? ← try some <$> R2M.delabR2M proof catch ex =>
+    if ex.isInterrupt || ex.isRuntime then throw ex else pure none
+  if let some stx := stx? then
+    if ← elaboratesAgainst stx stmt then return some stx
+  let stx ← PrettyPrinter.delab proof
+  if ← elaboratesAgainst stx stmt then return some stx
+  return none
+
 /-! ## The command -/
 
 /-- Extra constants made available to the search, as in `canonical [foo, bar]`. -/
@@ -359,8 +371,7 @@ elab (name := synthesizePredCmd) "#synthesize_pred " timeout?:(num)? examples?:(
             unless ← PBE.satisfiesExample f candidate ex do
               logWarning m!"the synthesized term{indentExpr candidate}\ndoes not satisfy \
                 the instantiated example `{ex}`"
-          let body ← PrettyPrinter.delab candidate
-          let defCmd ← `(command| def $fnameId:ident : $sig:term := $body:term)
+          let defCmd ← R2M.mkDefCommand fnameId sig f candidate type
 
           -- Attempt to prove each predicate about the candidate. The candidate
           -- is let-bound under the function's name in place of the opaque
@@ -383,8 +394,7 @@ elab (name := synthesizePredCmd) "#synthesize_pred " timeout?:(num)? examples?:(
                 let rfl? ← try rflProof? stmt
                   catch ex => if ex.isInterrupt || ex.isRuntime then throw ex else pure none
                 if let some proof := rfl? then
-                  let stx ← PrettyPrinter.delab proof
-                  if ← elaboratesAgainst stx stmt then
+                  if let some stx ← delabProof proof stmt then
                     return (some stx, none)
                 let proof? ← try
                     prove thmName.toString stmt consts timeout
@@ -396,12 +406,11 @@ elab (name := synthesizePredCmd) "#synthesize_pred " timeout?:(num)? examples?:(
                   | return (none, some m!"found no proof that the synthesized function \
                       satisfies this predicate; increase the timeout with \
                       `#synthesize_pred {timeout.toNat * 2} {fname} : …` to search longer")
-                let stx ← PrettyPrinter.delab proof
-                if ← elaboratesAgainst stx stmt then
+                if let some stx ← delabProof proof stmt then
                   return (some stx, none)
                 return (none, some m!"a proof that the synthesized function satisfies this \
                   predicate was found, but it does not re-elaborate and was \
-                  discarded:{indentD stx}")
+                  discarded:{indentD (← PrettyPrinter.delab proof)}")
             if let some warning := warning? then
               logWarningAt t m!"{warning}\nthe definition `{fname}` is only guaranteed to \
                 satisfy the instantiated example equations, not this predicate"
