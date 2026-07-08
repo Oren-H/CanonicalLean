@@ -97,14 +97,18 @@ Implementation: `ProgramByPredicate.lean` (command `#synthesize_pred`, namespace
    in a single `ToCanonicalM` run and attaches them as `equations` of the goal
    `Decl`; then `runCanonical`, `fromCanonical`, and verification against the
    instantiated equations.
-6. **Prove the predicates** about the found candidate (`prove`). The candidate
-   is let-bound under the function's name in place of the opaque local `f`
+6. **Prove the predicates** about the found candidate. The candidate is
+   let-bound under the function's name in place of the opaque local `f`
    (`withLetDecl`), so its defining equation reaches the solver as a reduction
-   rule and found proofs delaborate referring to the function *by name*; the
-   proposition — the predicate restated about the let binding — is handed to
-   the ordinary Canonical tactic pipeline (`getPremises → preprocess →
-   toCanonical → runCanonical → postprocess`) with the user-supplied premises
-   and timeout. A found proof is delaborated and re-elaborated against the
+   rule and found proofs delaborate referring to the function *by name*.
+   Definitionally true predicates are proved directly with `Eq.refl`
+   (`rflProof?`), without invoking the solver — this also rescues specs like
+   `comm 1 1 = 2` whose solver reconstruction routes through propositional
+   rewrites (e.g. `Nat.succ.injEq`) that do not re-elaborate as tactics.
+   Otherwise the proposition — the predicate restated about the let binding —
+   is handed to the ordinary Canonical tactic pipeline (`prove`:
+   `getPremises → preprocess → toCanonical → runCanonical → postprocess`)
+   with the user-supplied premises and timeout. A found proof is delaborated and re-elaborated against the
    statement (`elaboratesAgainst`) — reconstructed proofs may embed `simp only`
    attributions that only make sense as syntax, and delaboration need not
    round-trip — and, if it survives, becomes a `theorem f_spec…` in the

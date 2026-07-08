@@ -218,6 +218,17 @@ def prove (name : String) (prop : Lean.Expr) (consts : Array Name)
     proofs.mapM instantiateMVars
   return proofs[0]?
 
+/-- If `stmt` — a possibly universally quantified equation — is true by
+    definitional equality, return the `fun … ↦ Eq.refl _` proof. Such
+    statements need no search, and the solver's reconstruction can embed
+    propositional rewrites (e.g. `Nat.succ.injEq`) that do not re-elaborate
+    as tactics even when the goal is definitionally trivial. -/
+def rflProof? (stmt : Lean.Expr) : MetaM (Option Lean.Expr) := do
+  forallTelescope stmt fun xs body => do
+    let some (_, lhs, rhs) := body.eq? | return none
+    unless ← withoutArityUnfold (isDefEq lhs rhs) do return none
+    return some (← mkLambdaFVars xs (← mkEqRefl rhs))
+
 /-- Check that the delaborated proof `stx` elaborates back to a complete proof
     of `stmt`. Reconstructed proofs may embed `simp only` attributions that
     only make sense as re-elaborated syntax, and delaboration need not round-
@@ -366,6 +377,15 @@ elab (name := synthesizePredCmd) "#synthesize_pred " timeout?:(num)? examples?:(
             let (proofStx?, warning?) ← withLCtx ((← getLCtx).erase f.fvarId!) (← getLocalInstances) do
               withLetDecl fname type candidate fun fc => do
                 let stmt := e.replaceFVar f fc
+                -- A definitionally true predicate needs no search: prove it
+                -- with `Eq.refl` directly. Failing that, fall through to the
+                -- solver.
+                let rfl? ← try rflProof? stmt
+                  catch ex => if ex.isInterrupt || ex.isRuntime then throw ex else pure none
+                if let some proof := rfl? then
+                  let stx ← PrettyPrinter.delab proof
+                  if ← elaboratesAgainst stx stmt then
+                    return (some stx, none)
                 let proof? ← try
                     prove thmName.toString stmt consts timeout
                   catch ex =>
