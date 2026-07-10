@@ -85,10 +85,9 @@ provides the problem construction; the tactic driving it is in
    branch of the FFI reads the full `Decl`, equations included.
 5. **Search** with `runCanonical` (cancellable, honors the timeout).
 6. **Reconstruct** each returned term with `fromCanonical`, verify it against the
-   examples, admit the goal, and present `exact …` via `TryThis`. When no spec
-   proofs accompany the suggestion (see `ProgramByPredicate.md`), recursor
-   applications in it are rendered as pattern matching — inline `match` or
-   `let rec` — via `R2M.delabR2M`; see `RecursorToMatch.md`.
+   examples, admit the goal, and present `exact …` via `TryThis`, with recursor
+   applications rendered as pattern matching — inline `match` or `let rec` —
+   via `R2M.delabR2M`; see `RecursorToMatch.md`.
 
 ## Design decisions
 

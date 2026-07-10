@@ -1,7 +1,6 @@
 module
 
 public meta import ProgramByExample
-public meta import RecursorToMatch
 
 open Lean Parser Tactic Meta Elab Tactic Core Monomorphize
 
@@ -17,11 +16,9 @@ driven by the `synthesize` tactic (`Synthesize.lean`, which replaced the
 example inputs — themselves enumerated by Canonical, using its `count` option
 on the binder types — and the resulting ground equations become equational
 constraints on the declaration under synthesis, exactly as for plain
-input–output examples (see `ProgramByExample.lean`). Once a function is
-found, `provePredicatesLetBound` attempts to *prove* each predicate about it;
-found proofs become `theorem`s for the user to paste, and predicates that
-could not be proved produce a warning. See `ProgramByPredicate.md` for the
-design. -/
+input–output examples (see `ProgramByExample.lean`). The predicates
+themselves are only sampled, not verified. See `ProgramByPredicate.md` for
+the design. -/
 
 /-! ## Term enumeration
 
@@ -191,151 +188,7 @@ def dedupExamples (examples : Array Lean.Expr) : Array Lean.Expr := Id.run do
     out := out.push e
   return out
 
-/-! ## Predicate verification
-
-The instantiated equations only *sample* each predicate, so a function that
-satisfies all of them need not satisfy the predicates themselves. After the
-search succeeds, we therefore attempt to prove each predicate about the
-synthesized function. The candidate is let-bound under the function's name
-(`provePredicatesLetBound`): the binding's defining equation reaches the
-solver as a single reduction rule to the raw term, each predicate is restated
-about the binding, and the resulting proposition is handed to the ordinary
-Canonical tactic pipeline. (The former `#synthesize_pred` command could do
-better — elaborate the suggested `def` in a sandboxed copy of the command
-state and prove against its match-form equation lemmas — but command
-elaboration is not available from within a tactic.) -/
-
-/-- Attempt to prove the proposition `prop` with Canonical, driving the same
-    pipeline as the `canonical` tactic (`getPremises → preprocess →
-    toCanonical → runCanonical → postprocess`); `consts` are extra constants
-    made available to the search. Returns the first proof found. -/
-def prove (name : String) (prop : Lean.Expr) (consts : Array Name)
-    (timeout : UInt64) : MetaM (Option Lean.Expr) := do
-  let goal ← mkFreshExprMVar prop
-  let goalId := goal.mvarId!
-  let config : Config := {}
-  let proofs ← goalId.withContext do
-    let (premises, structs) ← getPremises goalId consts config
-    let (processedGoal, reconstruct) ← withArityUnfold config.monomorphize do
-      preprocess goalId config structs
-    let typ ← withArityUnfold config.monomorphize do processedGoal.withContext do
-      toCanonical (← processedGoal.getType) premises (structs.push ``Pi) config
-    let result ← runCanonical { name, type := some typ } timeout config
-    let proofs ← postprocess result processedGoal config reconstruct
-    proofs.mapM instantiateMVars
-  return proofs[0]?
-
-/-- If `stmt` — a possibly universally quantified equation — is true by
-    definitional equality, return the `fun … ↦ Eq.refl _` proof. Such
-    statements need no search, and the solver's reconstruction can embed
-    propositional rewrites (e.g. `Nat.succ.injEq`) that do not re-elaborate
-    as tactics even when the goal is definitionally trivial. -/
-def rflProof? (stmt : Lean.Expr) : MetaM (Option Lean.Expr) := do
-  forallTelescope stmt fun xs body => do
-    let some (_, lhs, rhs) := body.eq? | return none
-    unless ← withoutArityUnfold (isDefEq lhs rhs) do return none
-    return some (← mkLambdaFVars xs (← mkEqRefl rhs))
-
-/-- Check that the delaborated proof `stx` elaborates back to a complete proof
-    of `stmt`. Reconstructed proofs may embed `simp only` attributions that
-    only make sense as re-elaborated syntax, and delaboration need not round-
-    trip in general, so a suggestion is only trustworthy if it passes this. -/
-def elaboratesAgainst (stx : TSyntax `term) (stmt : Lean.Expr) : Term.TermElabM Bool := do
-  try
-    withoutModifyingState do Term.withoutErrToSorry do
-      let proof ← Term.elabTermEnsuringType stx (some stmt)
-      Term.synthesizeSyntheticMVarsNoPostponing
-      let proof ← instantiateMVars proof
-      return !proof.hasSorry && !proof.hasExprMVar
-  catch ex =>
-    if ex.isInterrupt || ex.isRuntime then throw ex
-    return false
-
-/-- Delaborate `proof`, preferring the recursor→match rendering, keeping a
-    rendering only if it re-elaborates against `stmt`; a suggestion that was
-    trustworthy before the conversion stays trustworthy after it. -/
-def delabProof (proof stmt : Lean.Expr) : Term.TermElabM (Option (TSyntax `term)) := do
-  let stx? ← try some <$> R2M.delabR2M proof catch ex =>
-    if ex.isInterrupt || ex.isRuntime then throw ex else pure none
-  if let some stx := stx? then
-    if ← elaboratesAgainst stx stmt then return some stx
-  let stx ← PrettyPrinter.delab proof
-  if ← elaboratesAgainst stx stmt then return some stx
-  return none
-
-/-- Attempt to prove `stmt` — one predicate restated about the definition under
-    test — first by `Eq.refl`, then with the solver. Returns the delaborated
-    proof, or a warning explaining why none survived. -/
-def proveOne (stmt : Lean.Expr) (thmName : Name) (consts : Array Name)
-    (timeout : UInt64) :
-    Term.TermElabM (Option (TSyntax `term) × Option MessageData) := do
-  -- A definitionally true predicate needs no search: prove it with `Eq.refl`
-  -- directly. Failing that, fall through to the solver.
-  let rfl? ← try rflProof? stmt
-    catch ex => if ex.isInterrupt || ex.isRuntime then throw ex else pure none
-  if let some proof := rfl? then
-    if let some stx ← delabProof proof stmt then
-      return (some stx, none)
-  let proof? ← try
-      prove thmName.toString stmt consts timeout
-    catch ex =>
-      if ex.isInterrupt || ex.isRuntime then throw ex
-      return (none, some m!"the attempt to prove this predicate about the \
-        synthesized function failed:{indentD ex.toMessageData}")
-  let some proof := proof?
-    | return (none, some m!"found no proof that the synthesized function \
-        satisfies this predicate; increase the timeout with \
-        `synthesize {timeout.toNat * 2}` to search longer")
-  if let some stx ← delabProof proof stmt then
-    return (some stx, none)
-  return (none, some m!"a proof that the synthesized function satisfies this \
-    predicate was found, but it does not re-elaborate and was \
-    discarded:{indentD (← PrettyPrinter.delab proof)}")
-
-/-- Attempt to prove each predicate — `(t, stmt)` pairs the clause syntax with
-    the statement about the definition under test. Returns the `theorem`
-    commands for the proofs found and, for each predicate that resisted, its
-    clause syntax paired with the warning. -/
-def provePredicates (preds : Array (Term × Lean.Expr)) (consts : Array Name)
-    (timeout : UInt64) (fname : Name) :
-    Term.TermElabM (Array (TSyntax `command) × Array (Term × MessageData)) := do
-  let mut thmCmds := #[]
-  let mut warnings := #[]
-  let mut i := 0
-  for (t, stmt) in preds do
-    i := i + 1
-    let thmName := fname.appendAfter (if preds.size == 1 then "_spec" else s!"_spec_{i}")
-    let (proofStx?, warning?) ← proveOne stmt thmName consts timeout
-    if let some warning := warning? then
-      warnings := warnings.push (t, warning)
-    if let some proofStx := proofStx? then
-      let thmNameId := mkIdent thmName
-      thmCmds := thmCmds.push
-        (← `(command| theorem $thmNameId:ident : $t:term := $proofStx:term))
-  return (thmCmds, warnings)
-
-/-- The warning for a predicate that resisted proof: the definition is then
-    only guaranteed to satisfy the instantiated equations, not the predicate. -/
-def predWarning (fname : Name) (w : MessageData) : MessageData :=
-  m!"{w}\nthe definition `{fname}` is only guaranteed to satisfy the \
-    instantiated example equations, not this predicate"
-
-/-- Prove the predicates about `candidate` let-bound under `fname` in place of
-    the opaque local `f` — the definition itself does not exist yet while the
-    `synthesize` tactic elaborates its body. The binding's defining equation
-    reaches the solver as a single reduction rule to the raw term, and found
-    proofs delaborate referring to the function by name. Logs the warnings;
-    returns the `theorem` commands. -/
-def provePredicatesLetBound (fname : Name) (type candidate f : Lean.Expr)
-    (preds : Array (Term × Lean.Expr)) (consts : Array Name) (timeout : UInt64) :
-    Term.TermElabM (Array (TSyntax `command)) := do
-  withLCtx ((← getLCtx).erase f.fvarId!) (← getLocalInstances) do
-    withLetDecl fname type candidate fun fc => do
-      let preds := preds.map fun (t, e) => (t, e.replaceFVar f fc)
-      let (thmCmds, warnings) ← provePredicates preds consts timeout fname
-      for (t, warning) in warnings do
-        logWarningAt t (predWarning fname warning)
-      return thmCmds
+/-! ## Candidate pinning -/
 
 /-- Prepare `candidate` to survive outside the current elaboration context:
     Canonical does not translate universe levels, so the reconstruction carries

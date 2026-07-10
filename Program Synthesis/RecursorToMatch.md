@@ -18,12 +18,8 @@ def add : Nat → Nat → Nat
   | a, Nat.succ n => (add a n).succ
 ```
 
-The conversion applies only to the `synthesize` tactic's output; the
-`canonical` tactic's suggestions are unchanged. A `synthesize` suggestion is
-rendered this way when no spec-theorem proofs accompany it — proofs are
-checked against the raw candidate, and the suggestion then stays raw so the
-pasted definition unfolds to the term the proofs elaborate against (see
-`ProgramByPredicate.md`, step 7).
+The conversion applies only to the `synthesize` tactic's `exact …`
+suggestions; the `canonical` tactic's suggestions are unchanged.
 
 ## Interface
 
@@ -57,7 +53,7 @@ Entry points:
 
 - `delabR2M : Expr → MetaM Term` — delaborate with the conversion enabled
   (renderings 2 and 3); used by the `synthesize` tactic for its `exact …`
-  suggestions (gated by `roundTrips`) and for theorem proofs (`delabProof`).
+  suggestions (gated by `roundTrips`).
 - `mkDefCommand fnameId sig f t type : TermElabM (TSyntax `command)` — build a
   whole `def` suggestion, preferring rendering 1. The former `#synthesize`/
   `#synthesize_pred` commands presented definitions this way; the `synthesize`

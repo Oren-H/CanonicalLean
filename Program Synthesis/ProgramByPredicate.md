@@ -32,33 +32,16 @@ def pred : Nat → Nat := by
 In the clauses, `pred` refers to the definition's own name — the auxiliary
 local constant Lean introduces while elaborating the `def`. On success, the
 tactic logs the instantiated example equations, admits the goal (like
-`canonical`), and reports `Try this: exact fun a => …`; clicking the
-suggestion replaces the tactic, clauses included, with the synthesized term.
+`canonical`), and reports `Try this: exact fun a => …`, with recursor
+applications rendered as pattern matching by `R2M.delabR2M` (see
+`RecursorToMatch.md`); clicking the suggestion replaces the tactic, clauses
+included, with the synthesized term.
 
-Because the equations only *sample* the predicates, the tactic then attempts
-to **prove** each predicate about the synthesized function (with the same
-timeout per predicate), let-bound under the definition's name (see step 6).
-The proofs found are logged as ready-to-paste `theorem`s:
-
-```lean
-the synthesized function provably satisfies 2/2 clause(s); paste after the definition:
-
-theorem pred_spec_1 : pred 0 = 0 := Eq.refl Nat.zero
-
-theorem pred_spec_2 : ∀ n : Nat, pred (n + 1) = n := fun n ↦ Eq.refl n
-```
-
-(`f_spec` if there is a single predicate, `f_spec_<i>` numbered in clause order
-otherwise). Each predicate that could not be proved produces a warning: the
-definition is then only guaranteed to satisfy the instantiated equations, not
-the predicate itself — either because the search timed out, or because the
-function genuinely does not satisfy it.
-
-When proofs are found, the suggested term is displayed raw — the pasted
-definition must unfold to the very term the proofs were checked against.
-Otherwise recursor applications in the suggestion are rendered as pattern
-matching by `R2M.delabR2M` (see `RecursorToMatch.md`), as are the proofs
-themselves by `delabProof`.
+The instantiated equations only *sample* the predicates: each candidate is
+re-checked against them by definitional equality (a failure produces a
+warning), but the predicates themselves are **not verified** — a function
+that satisfies every sample need not satisfy a quantified clause (see
+Limitations).
 
 Each clause is a (possibly) universally quantified equation whose left-hand side
 is an application of the function under synthesis; both sides may mention the
@@ -77,8 +60,8 @@ warning.
 ## How it works
 
 Implementation: this file, `ProgramByPredicate.lean` (namespace
-`Canonical.PBP`), provides the enumeration, instantiation, and verification
-machinery; the tactic driving it is in `Synthesize.lean`. Pipeline:
+`Canonical.PBP`), provides the enumeration and instantiation machinery; the
+tactic driving it is in `Synthesize.lean`. Pipeline:
 
 1. **The signature is the tactic goal**, and the function is the auxiliary
    local constant Lean introduces for the definition being elaborated; each
@@ -117,34 +100,12 @@ machinery; the tactic driving it is in `Synthesize.lean`. Pipeline:
    example backend of `ProgramByExample.md` — which translates the signature
    and the equations in a single `ToCanonicalM` run and attaches them as
    `equations` of the goal `Decl`; then `runCanonical`, `fromCanonical`, and
-   verification against the instantiated equations.
-6. **Prove the predicates** — about the candidate let-bound under the
-   function's name (`provePredicatesLetBound`, `withLetDecl`): the definition
-   itself does not exist yet while the tactic elaborates its body, so the
-   binding's defining equation reaches the solver as a single reduction rule
-   to the raw term, and each predicate is restated about the binding.
-   Definitionally true predicates are proved directly with `Eq.refl`
-   (`rflProof?`), without invoking the solver — this also rescues specs like
-   `comm 1 1 = 2` whose solver reconstruction routes through propositional
-   rewrites (e.g. `Nat.succ.injEq`) that do not re-elaborate as tactics.
-   Otherwise the proposition is handed to the ordinary Canonical tactic
-   pipeline (`prove`: `getPremises → preprocess → toCanonical → runCanonical
-   → postprocess`) with the user-supplied premises and timeout. A found proof
-   is delaborated and re-elaborated against the statement
-   (`elaboratesAgainst`) — reconstructed proofs may embed `simp only`
-   attributions that only make sense as syntax, and delaboration need not
-   round-trip — and, if it survives, becomes a logged `theorem f_spec…`;
-   proofs refer to the function by name, which, once pasted after the
-   applied suggestion, resolves to the definition — whose value is the very
-   term they were checked against. Predicates whose proof search fails,
-   times out, or does not re-elaborate produce a warning either way.
-7. **Suggest** `exact …` via `TryThis` and admit the goal. When theorems were
-   found the suggested term is displayed raw, so that the pasted definition
-   unfolds to the term the proofs elaborate against — a `match`/`let rec`
-   rendering compiles through `brecOn` and auxiliary matchers, against which
-   proofs that inline the raw recursors in their motives need not typecheck.
-   With nothing to stay consistent with, recursor applications are rendered
-   as pattern matching (`R2M.delabR2M`, gated by `R2M.roundTrips`).
+   verification against the instantiated equations (`satisfiesExample`, by
+   definitional equality; a failure produces a warning).
+6. **Suggest** `exact …` via `TryThis` and admit the goal, with recursor
+   applications rendered as pattern matching (`R2M.delabR2M`, kept only if
+   the rendering re-elaborates to the same function per `R2M.roundTrips`;
+   any failure falls back to the raw recursor display).
 
 ## Design decisions
 
@@ -161,33 +122,23 @@ machinery; the tactic driving it is in `Synthesize.lean`. Pipeline:
   predicate such as commutativity loses its diagonal and mirror-image
   instantiations to the trivial/duplicate filter, so it contributes fewer
   equations than `k`.
-- **Suggestion and proofs stay consistent.** The proofs are checked against
-  the let-bound raw candidate, so whenever proofs are logged the suggestion is
-  that raw term; the prettier `match`/`let rec` rendering is reserved for
-  candidates without accompanying theorems.
 
 ## Limitations / future work
 
-- **Verification is best-effort.** A predicate that resists proof within the
-  timeout only yields a warning — it does not distinguish "the proof search
-  timed out" from "the function does not satisfy the predicate". From
-  `∀ n m, f n m = f m n` alone with few examples, the solver may return a
-  function that is not commutative (a warning on the `add` smoke test is
-  expected for this reason); increase `(examples := n)` to constrain the
-  search further. Conversely, a true predicate may need a proof (e.g. by
-  induction) that Canonical does not find within the timeout — increase the
-  timeout or prove it manually.
-- **Proofs run against the raw candidate.** The former `#synthesize_pred`
-  command elaborated the suggested match-form `def` in a sandboxed copy of
-  the command state and proved the predicates against its equation lemmas —
-  rules the solver is markedly better at proving with than a delta rule to a
-  recursor term. Command elaboration is not available from within a tactic,
-  so the tactic proves against the let-bound raw term; recovering match-form
-  proving (e.g. by handing the solver the candidate's ι-reduction equations
-  directly) is future work.
-- **Proof attempts cost time.** Each predicate gets its own proof search with
-  the tactic's timeout, so the worst case adds `timeout × #predicates` per
-  candidate on top of the synthesis search.
+- **Predicates are not verified.** Only the instantiated sample equations are
+  checked (definitionally, after reconstruction). From `∀ n m, f n m = f m n`
+  alone with few examples, the solver may return a function that is not
+  commutative; increase `(examples := n)` to constrain the search further, and
+  state and prove the predicates as theorems yourself. The former
+  `#synthesize_pred` command attempted these proofs and emitted `theorem
+  f_spec…` suggestions — it could, because it elaborated the suggested
+  match-form `def` in a sandboxed copy of the command state and proved
+  against that constant's equation lemmas. Inside a tactic the definition
+  does not exist yet: proofs would have to be minted against the raw
+  candidate with its recursors inlined, and such proofs do not re-elaborate
+  against the pasted `match`/`let rec` definition (which compiles through
+  `brecOn` and auxiliary matchers — definitionally distinct from the raw
+  recursor term on open arguments). Re-adding verification is future work.
 - **No dependent quantification.** Binder types must be closed types; `∀ (n :
   Nat) (h : n ≤ 2), …` is rejected. (A closed `Prop` binder is accepted — its
   "examples" are proofs found by Canonical — but this is untested territory.)

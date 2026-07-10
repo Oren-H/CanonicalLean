@@ -4,8 +4,9 @@ import Canonical
 searches; a "No function found" outcome is an elaboration error and fails the
 build. Like `canonical`, the tactic admits the goal — the definitions below
 elaborate with `sorryAx` bodies — and offers each function found as a
-`Try this: exact …` suggestion; the pasted outputs at the bottom of the file
-are the regression tests for the suggestion text itself. -/
+`Try this: exact …` suggestion, recursors rendered as `match`/`let rec`; the
+pasted outputs at the bottom of the file are the regression tests for the
+suggestion text itself. -/
 
 /-! ## Input–output examples (the former `#synthesize`) -/
 
@@ -58,8 +59,9 @@ def double' : Nat → Nat := by
 -- Both sides of a clause may mention the function. From four instantiations
 -- of commutativity only `add 0 1 = add 1 0` survives — `add 0 0 = add 0 0`
 -- and `add 1 1 = add 1 1` are trivial and the mirror image of the survivor
--- is a duplicate. A warning for a clause the proof search cannot verify
--- (e.g. commutativity of a non-commutative candidate) is expected here.
+-- is a duplicate. The quantified clauses are only sampled: the synthesized
+-- function satisfies the instantiated equations, not necessarily the
+-- predicates themselves.
 def add : Nat → Nat → Nat := by
   synthesize 60
   | ∀ n m : Nat, add n m = add m n
@@ -69,8 +71,7 @@ def add : Nat → Nat → Nat := by
 /-! ## Pasted outputs
 
 Applying a suggestion replaces `synthesize …` with `exact …` inside the `by`
-block, and the proved spec theorems are logged for pasting after the
-definition. The declarations below are outputs of earlier runs and must keep
+block. The declarations below are outputs of earlier runs and must keep
 elaborating. -/
 
 -- A `let rec`/`match` rendering elaborates in `exact` position.
@@ -85,24 +86,12 @@ def add2 : Nat → Nat → Nat := by
 example : add2 3 4 = 7 := rfl
 example : add2 3 0 = 3 := rfl
 
--- A raw-recursor suggestion together with its logged `theorem` proofs.
-def comm2 : Nat → Nat → Nat := by
-  exact fun a a_1 ↦ Nat.rec (motive := fun t ↦ Nat) a (fun n n_ih ↦ n_ih.succ) a_1
-theorem comm2_spec_1 : ∀ n m : Nat, comm2 n m = comm2 m n := fun n m ↦
-  Nat.rec (motive := fun t ↦
-    Nat.rec (motive := fun t ↦ Nat) t (fun n n_ih ↦ n_ih.succ) m =
-      Nat.rec (motive := fun t ↦ Nat) m (fun n n_ih ↦ n_ih.succ) t)
-    (Nat.rec (motive := fun t ↦ Nat.rec (motive := fun t ↦ Nat) Nat.zero (fun n n_ih ↦ n_ih.succ) t = t)
-      (Eq.refl Nat.zero) (fun n n_ih ↦ by simp only [Nat.succ.injEq] <;> exact n_ih) m)
-    (fun n n_ih ↦
-      Eq.rec (motive := fun a t ↦ Nat.rec (motive := fun t ↦ Nat) n.succ (fun n n_ih ↦ n_ih.succ) m = a)
-        (Nat.rec (motive := fun t ↦
-          Nat.rec (motive := fun t ↦ Nat) n.succ (fun n n_ih ↦ n_ih.succ) t =
-            (Nat.rec (motive := fun t ↦ Nat) n (fun n n_ih ↦ n_ih.succ) t).succ)
-          (by simp only [Nat.succ.injEq] <;> exact Eq.refl n)
-          (fun n_1 n_ih ↦ by simp only [Nat.succ.injEq] <;> exact n_ih) m)
-        (by simp only [Nat.succ.injEq] <;> exact n_ih))
-    n
-theorem comm2_spec_2 : ∀ n : Nat, comm2 n 0 = n := fun n ↦ Eq.refl n
-theorem comm2_spec_3 : comm2 1 1 = 2 :=
-  Eq.refl 2
+-- An inline-`match` rendering (non-recursive elimination).
+def pred2 : Nat → Nat := by
+  exact fun a =>
+    match a with
+    | Nat.zero => a
+    | Nat.succ n => n
+
+example : pred2 0 = 0 := rfl
+example : pred2 3 = 2 := rfl

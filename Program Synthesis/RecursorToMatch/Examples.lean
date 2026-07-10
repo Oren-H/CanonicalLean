@@ -249,8 +249,9 @@ def mapSucc2 : List Nat → List Nat
 
 example : mapSucc2 [1, 2] = [2, 3] := rfl
 
--- A full `synthesize`-style output: the spec theorems' `Eq.refl` proofs
--- still typecheck against the match-converted definition.
+-- Hand-stated spec theorems: `Eq.refl` proofs typecheck against the
+-- match-converted definition (the non-recursive matcher computes on
+-- constructors).
 def pred2 : Nat → Nat := fun a ↦
   match a with
   | Nat.zero => a
@@ -260,10 +261,10 @@ theorem pred2_spec_1 : pred2 0 = 0 := Eq.refl 0
 
 theorem pred2_spec_2 : ∀ n : Nat, pred2 (n + 1) = n := fun n ↦ Eq.refl n
 
-/-! ## End to end: a real `synthesize` search exercises the presentation.
+/-! ## End to end: a real `synthesize` search runs through the converter.
 The found term (and hence the suggestion text) varies from run to run, so the
-message is not pinned; elaborating the definition is the test. When the spec
-clauses resist proof the suggestion runs through the converter,
+message is not pinned; elaborating the definition is the test. A typical
+suggestion is
 ```
 exact fun a a_1 =>
   let rec go : Nat → Nat := fun x =>
@@ -271,10 +272,7 @@ exact fun a a_1 =>
     | Nat.zero => a_1
     | Nat.succ n => (go n).succ
   go a
-```
-while clauses proved about the candidate (ground examples are typically
-`Eq.refl`-provable) pin the suggestion to the raw term the proofs elaborate
-against. -/
+``` -/
 
 def add3 : Nat → Nat → Nat := by
   synthesize

@@ -1,6 +1,7 @@
 module
 
 public meta import ProgramByPredicate
+public meta import RecursorToMatch
 
 open Lean Parser Tactic Meta Elab Tactic Core Monomorphize
 
@@ -32,15 +33,12 @@ in `ProgramByExample.lean` and `ProgramByPredicate.lean`).
 The instantiated equations become equational constraints on the declaration
 under synthesis (`PBE.toProblem`), and Canonical searches for a function of
 the goal type satisfying them. Like `canonical`, the tactic then admits the
-goal and offers each function found as a `Try this: exact …` suggestion.
-Because the equations only *sample* the clauses, the tactic also attempts to
-*prove* each clause about the function (let-bound under its name, with the
-same timeout per clause): the proofs found are logged as ready-to-paste
-`theorem f_spec…` declarations, and every clause that resists produces a
-warning — the function is then only guaranteed to satisfy the instantiated
-examples. When proofs are found the suggestion is the raw term the proofs
-were checked against; otherwise recursor applications are rendered as
-`match`/`let rec` syntax. -/
+goal and offers each function found as a `Try this: exact …` suggestion, with
+recursor applications rendered as `match`/`let rec` syntax (`R2M.delabR2M`).
+The instantiated equations only *sample* quantified clauses: each candidate
+is re-checked against them by definitional equality (a failure produces a
+warning), but the clauses themselves are not verified — a function
+satisfying every sample need not satisfy the predicates. -/
 
 /-- The elaborator wraps applications of the function under definition in
     `_recApp` metadata (bookkeeping for the recursion compiler, which never
@@ -79,22 +77,19 @@ syntax synthClause := "| " term
 
 /-- `synthesize`, in the body of `def f : T := by synthesize`, followed by
     `| ∀ x₁ … xₙ, f a₁ … aₘ = b` clauses, searches for a function of type `T`
-    satisfying all of the clauses and suggests it as `exact …`. In the clauses
-    `f` refers to the definition's own name. Each quantified clause is
+    satisfying all of the clauses and suggests it as `exact …`, with recursor
+    applications rendered as `match`/`let rec` syntax. In the clauses `f`
+    refers to the definition's own name. Each quantified clause is
     instantiated with concrete inputs enumerated by Canonical; a clause
     without binders is an ordinary input–output example. The instantiated
-    equations constrain the search as in the former `#synthesize` command.
-    Once a function is found, the tactic admits the goal, suggests the
-    function via `Try this:` (rendered with `match`/`let rec` syntax when no
-    spec proofs accompany it, raw otherwise, so that pasted proofs elaborate
-    against the pasted definition), and attempts to prove each clause about
-    it (with the same timeout per clause): proofs found are logged as
-    `theorem f_spec…` declarations to paste after the definition, and every
-    clause that could not be proved produces a warning — the function then
-    only provably satisfies the instantiated examples. An optional numeral sets
-    the timeout in seconds (`synthesize 30`), `(examples := n)` sets the
-    number of instantiations per clause, and an optional premise list
-    provides extra constants to the search (`synthesize [Nat.add]`). -/
+    equations constrain the search as in the former `#synthesize` command,
+    and each function found is re-checked against them (a failure produces a
+    warning) — the quantified clauses themselves are only sampled, not
+    verified. Once a function is found, the tactic admits the goal and
+    suggests it via `Try this:`. An optional numeral sets the timeout in
+    seconds (`synthesize 30`), `(examples := n)` sets the number of
+    instantiations per clause, and an optional premise list provides extra
+    constants to the search (`synthesize [Nat.add]`). -/
 elab (name := synthesizeTac) "synthesize " timeout?:(num)? examples?:(synthExamples)?
     premises?:(synthPremises)? clauses:synthClause* : tactic => do
   let ref ← getRef
@@ -217,26 +212,7 @@ elab (name := synthesizeTac) "synthesize " timeout?:(num)? examples?:(synthExamp
             logWarning m!"the synthesized term{indentExpr candidate}\ndoes not satisfy \
               the instantiated example `{ex}`"
         let candidate := (← PBP.pinCandidate? candidate).getD candidate
-        -- The equations only sample the clauses: attempt to prove each clause
-        -- about the candidate, let-bound under the function's name. Proofs
-        -- delaborate referring to the function by name, which, once the
-        -- suggestion below is applied, resolves to the definition itself.
-        let thmCmds ← PBP.provePredicatesLetBound fname type candidate f
-          (predicates.map fun (t, e, _, _) => (t, e)) consts timeout
-        if thmCmds.isEmpty then
-          addExactSuggestionR2M ref candidate type
-        else
-          -- The proofs were checked against the candidate itself, which the
-          -- pasted definition must therefore unfold to: suggest the raw term.
-          -- A `match`/`let rec` rendering compiles through `brecOn` and
-          -- auxiliary matchers, against which proofs that inline the raw
-          -- recursors in their motives need not re-elaborate.
-          TryThis.addExactSuggestion ref candidate
-          let text := "\n\n".intercalate (← thmCmds.toList.mapM fun cmd =>
-            return (← PrettyPrinter.ppCommand cmd).pretty)
-          logInfo m!"the synthesized function provably satisfies \
-            {thmCmds.size}/{predicates.size} clause(s); paste after the \
-            definition:\n\n{text}"
+        addExactSuggestionR2M ref candidate type
       Elab.admitGoal goal
 
 end
