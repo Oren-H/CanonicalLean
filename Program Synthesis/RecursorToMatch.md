@@ -18,12 +18,12 @@ def add : Nat → Nat → Nat
   | a, Nat.succ n => (add a n).succ
 ```
 
-The conversion applies only to `#synthesize` and `#synthesize_pred`; the
-`canonical` tactic's suggestions are unchanged. In `#synthesize_pred` the
-converted definition is more than display: it is elaborated in a sandboxed
-command state and the predicate proofs are attempted *about it*, so the solver
-works with its match-form equation lemmas (see `ProgramByPredicate.md`,
-step 6).
+The conversion applies only to the `synthesize` tactic's output; the
+`canonical` tactic's suggestions are unchanged. A `synthesize` suggestion is
+rendered this way when no spec-theorem proofs accompany it — proofs are
+checked against the raw candidate, and the suggestion then stays raw so the
+pasted definition unfolds to the term the proofs elaborate against (see
+`ProgramByPredicate.md`, step 7).
 
 ## Interface
 
@@ -56,11 +56,15 @@ chosen by the shape of the recursor application:
 Entry points:
 
 - `delabR2M : Expr → MetaM Term` — delaborate with the conversion enabled
-  (renderings 2 and 3); used by `#synthesize_pred` for theorem proofs.
-- `mkDefCommand fnameId sig f t type : TermElabM (TSyntax `command)` — build the
-  whole `def` suggestion, preferring rendering 1; used by both commands for the
-  synthesized function. `f` is the local variable standing for the function under
-  synthesis (its user name is the definition's name printed in recursive calls).
+  (renderings 2 and 3); used by the `synthesize` tactic for its `exact …`
+  suggestions (gated by `roundTrips`) and for theorem proofs (`delabProof`).
+- `mkDefCommand fnameId sig f t type : TermElabM (TSyntax `command)` — build a
+  whole `def` suggestion, preferring rendering 1. The former `#synthesize`/
+  `#synthesize_pred` commands presented definitions this way; the `synthesize`
+  tactic suggests `exact` terms instead, so today rendering 1 is exercised only
+  by the `#r2m_def` build-time tests. `f` is the local variable standing for
+  the function under synthesis (its user name is the definition's name printed
+  in recursive calls).
 
 ## How it works
 
@@ -136,5 +140,5 @@ lake build RecursorToMatch   # unit tests (#guard_msgs), paste tests, and an e2e
 `RecursorToMatch/Examples.lean` pins exact converter output on handcrafted
 recursor terms with `#guard_msgs`, re-elaborates representative suggested texts
 (`def add2 …`, spec-theorem pairs) with `rfl` checks, and runs one real
-`#synthesize` end to end. The solver's found term varies run to run, so the e2e
-message is deliberately not pinned.
+`synthesize` search end to end. The solver's found term varies run to run, so
+the e2e message is deliberately not pinned.

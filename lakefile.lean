@@ -30,15 +30,20 @@ lean_lib Canonical where
 @[test_driver]
 lean_lib Test
 
-/-- Programming-by-example interface (`#synthesize`); see `Program Synthesis/ProgramByExample.md`. -/
+/-- Programming-by-example problem construction for the `synthesize` tactic; see `Program Synthesis/ProgramByExample.md`. -/
 lean_lib ProgramByExample where
   srcDir := "Program Synthesis"
-  roots := #[`ProgramByExample, `ProgramByExample.Examples]
+  roots := #[`ProgramByExample]
 
-/-- Programming-by-predicate interface (`#synthesize_pred`); see `Program Synthesis/ProgramByPredicate.md`. -/
+/-- Predicate instantiation and verification for the `synthesize` tactic; see `Program Synthesis/ProgramByPredicate.md`. -/
 lean_lib ProgramByPredicate where
   srcDir := "Program Synthesis"
-  roots := #[`ProgramByPredicate, `ProgramByPredicate.Examples]
+  roots := #[`ProgramByPredicate]
+
+/-- The `synthesize` tactic — program synthesis from examples and predicates inside `def … := by`. -/
+lean_lib Synthesize where
+  srcDir := "Program Synthesis"
+  roots := #[`Synthesize, `Synthesize.Examples]
 
 /-- Recursor-application → `match`-syntax rendering for synthesis suggestions; see `Program Synthesis/RecursorToMatch.md`. -/
 lean_lib RecursorToMatch where

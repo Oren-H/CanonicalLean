@@ -4,13 +4,13 @@
 
 Make Canonical usable as a programming-by-example (PBE) tool. The user provides:
 
-1. a function name and type signature, e.g. `f : Nat → Nat → Nat`;
+1. a `def` with a name and type signature, e.g. `def f : Nat → Nat → Nat`;
 2. a set of input–output examples, e.g. `f 0 0 = 0`, `f 0 1 = 1`, `f 1 1 = 2`.
 
 The examples are attached to the Canonical search as *equational constraints* on the
 declaration being synthesized, so the solver only returns terms that satisfy every
 example. Canonical then searches for an inhabitant of the signature and suggests it
-to the user as a complete Lean definition.
+to the user.
 
 This replaces the manual workflow in `Canonical/lean/Test.lean` (in the Rust repo),
 where the goal type is translated with `toCanonical`, the example spines
@@ -20,22 +20,31 @@ Lean syntax.
 
 ## Interface
 
+The user-facing interface is the `synthesize` tactic (`Synthesize.lean`, which
+replaced the `#synthesize` command and subsumes both this file's example
+pipeline and `ProgramByPredicate.md`'s quantified clauses), used in the body of
+the very definition being written:
+
 ```lean
-#synthesize f : Nat → Nat → Nat
+def f : Nat → Nat → Nat := by
+  synthesize
   | f 0 0 = 0
   | f 0 1 = 1
   | f 1 1 = 2
 ```
 
-On success, the command reports `Try this: def f : Nat → Nat → Nat := fun a b => …`;
-clicking the suggestion replaces the `#synthesize` command with the definition.
+In the clauses, `f` refers to the definition's own name — the auxiliary local
+constant Lean introduces while elaborating the `def`. On success, the tactic
+admits the goal (like `canonical`) and reports `Try this: exact fun a b => …`;
+clicking the suggestion replaces the tactic, clauses included, with the
+synthesized term.
 
 Optional arguments, mirroring the `canonical` tactic:
 
-- **Timeout** (seconds, default 5): `#synthesize 30 f : … `
+- **Timeout** (seconds, default 5): `synthesize 30`
 - **Premises** — extra constants made available to the search, useful when the
   target is best expressed in terms of existing functions:
-  `#synthesize 10 [Nat.add] double : Nat → Nat | double 1 = 2 | double 2 = 4`
+  `synthesize 10 [Nat.add]`
 
 Each candidate returned by the solver is re-checked against the examples by
 definitional equality (`isDefEq`) after reconstruction; a candidate that fails an
@@ -44,13 +53,18 @@ masquerade as success.
 
 ## How it works
 
-Implementation: `ProgramByExample.lean` (command `#synthesize`, namespace
-`Canonical.PBE`). Pipeline, all inside `runTermElabM`:
+Implementation: this file, `ProgramByExample.lean` (namespace `Canonical.PBE`),
+provides the problem construction; the tactic driving it is in
+`Synthesize.lean`. Pipeline:
 
-1. **Elaborate the signature** `T` with `Term.elabType`.
-2. **Introduce the function as a local variable** (`withLocalDeclD f T`), then
-   elaborate each example clause against expected type `Prop`. Validation: each
-   example must be an `Eq` whose left-hand side is an application of `f`.
+1. **The signature is the tactic goal** — the declared type of the `def`.
+2. **The function is the definition's auxiliary local**: Lean introduces a
+   local constant for `f` while elaborating `def f : T := by …` (so the body
+   can be recursive), and the clauses elaborate against expected type `Prop`
+   with `f` referring to it (the `_recApp` metadata the elaborator attaches to
+   its applications is stripped). Validation: each example must be an `Eq`
+   whose left-hand side is an application of `f`, and `f`'s type must be the
+   goal itself — binders to the left of the `def`'s colon are rejected.
 3. **Translate in a single `ToCanonicalM` run** (`toProblem`/`toProblem_`, modeled
    on `toCanonical`/`toCanonical_` from `Canonical/ToCanonical/Main.lean`):
    - the signature is translated with `toTyp`;
@@ -71,20 +85,22 @@ Implementation: `ProgramByExample.lean` (command `#synthesize`, namespace
    branch of the FFI reads the full `Decl`, equations included.
 5. **Search** with `runCanonical` (cancellable, honors the timeout).
 6. **Reconstruct** each returned term with `fromCanonical`, verify it against the
-   examples, and present `def f : T := …` via `TryThis`. Recursor applications in
-   the suggestion are rendered as pattern matching — definition-level equations,
-   inline `match`, or `let rec` — by `R2M.mkDefCommand`; see `RecursorToMatch.md`.
+   examples, admit the goal, and present `exact …` via `TryThis`. When no spec
+   proofs accompany the suggestion (see `ProgramByPredicate.md`), recursor
+   applications in it are rendered as pattern matching — inline `match` or
+   `let rec` — via `R2M.delabR2M`; see `RecursorToMatch.md`.
 
 ## Design decisions
 
 - **`f` is excluded from the problem's premises.** The local variable `f` exists
   only so the examples elaborate; the translation skips it when folding the local
-  context (otherwise the solver could "solve" the problem with `f := f`). Instead,
-  occurrences of `f` are identified with the declaration under synthesis: `toHead`
-  names the local variable `f.<uniq>`, and a post-pass renames that head to the
-  declaration name everywhere in the translated rules. Because renaming applies to
-  both sides, examples may mention `f` recursively on the right-hand side
-  (e.g. `f 2 = f 1 + 2`).
+  context (otherwise the solver could "solve" the problem with `f := f`) — the
+  fold already skips auxiliary declarations, which is what the definition's local
+  is. Instead, occurrences of `f` are identified with the declaration under
+  synthesis: `toHead` names the local variable `f.<uniq>`, and a post-pass
+  renames that head to the declaration name everywhere in the translated rules.
+  Because renaming applies to both sides, examples may mention `f` recursively on
+  the right-hand side (e.g. `f 2 = f 1 + 2`).
 - **`destruct := false`.** The tactic's destruct preprocessing rewrites a *goal
   metavariable* and is undone by a `reconstruct` closure; there is no goal
   metavariable here. With destruct disabled, `onTypeConst` defines structure
@@ -104,7 +120,7 @@ Implementation: `ProgramByExample.lean` (command `#synthesize`, namespace
 - **Monomorphic signatures.** No auto-bound implicits / universe polymorphism in
   the signature.
 - `count`, `debug`, and the refinement UI are not exposed; only timeout and
-  premises are. Extending the command with the tactic's `optConfig` is
+  premises are. Extending the tactic with `canonical`'s `optConfig` is
   straightforward if needed.
 - Quality of results with recursive examples depends entirely on the solver's
   handling of speculative recursor placement (program-synthesis mode).
@@ -112,8 +128,8 @@ Implementation: `ProgramByExample.lean` (command `#synthesize`, namespace
 ## Running
 
 ```bash
-lake build ProgramByExample   # builds the command and elaborates the Examples file
+lake build Synthesize   # builds the tactic and elaborates the Examples file
 ```
 
-`ProgramByExample/Examples.lean` contains end-to-end smoke tests; elaborating it
+`Synthesize/Examples.lean` contains end-to-end smoke tests; elaborating it
 runs real searches, and any "no function found" outcome fails the build.

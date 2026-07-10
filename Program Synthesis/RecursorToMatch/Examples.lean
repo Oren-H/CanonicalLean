@@ -1,5 +1,5 @@
 import RecursorToMatch
-import ProgramByExample
+import Synthesize
 
 /-! Tests for the recursor→match conversion. The `#r2m_term` command elaborates
 a term, delaborates it with the conversion enabled, and logs the result; each
@@ -249,8 +249,8 @@ def mapSucc2 : List Nat → List Nat
 
 example : mapSucc2 [1, 2] = [2, 3] := rfl
 
--- A full `#synthesize_pred`-style suggestion: the spec theorems' `Eq.refl`
--- proofs still typecheck against the match-converted definition.
+-- A full `synthesize`-style output: the spec theorems' `Eq.refl` proofs
+-- still typecheck against the match-converted definition.
 def pred2 : Nat → Nat := fun a ↦
   match a with
   | Nat.zero => a
@@ -260,17 +260,24 @@ theorem pred2_spec_1 : pred2 0 = 0 := Eq.refl 0
 
 theorem pred2_spec_2 : ∀ n : Nat, pred2 (n + 1) = n := fun n ↦ Eq.refl n
 
-/-! ## End to end: a real `#synthesize` search runs through the converter.
-The found term (and hence the exact suggestion text) varies from run to run,
-so the message is not pinned; elaborating the command is the test. A typical
-suggestion is
+/-! ## End to end: a real `synthesize` search exercises the presentation.
+The found term (and hence the suggestion text) varies from run to run, so the
+message is not pinned; elaborating the definition is the test. When the spec
+clauses resist proof the suggestion runs through the converter,
 ```
-def add3 : Nat → Nat → Nat
-  | Nat.zero, a_1 => a_1
-  | Nat.succ n, a_1 => (add3 n a_1).succ
-``` -/
+exact fun a a_1 =>
+  let rec go : Nat → Nat := fun x =>
+    match x with
+    | Nat.zero => a_1
+    | Nat.succ n => (go n).succ
+  go a
+```
+while clauses proved about the candidate (ground examples are typically
+`Eq.refl`-provable) pin the suggestion to the raw term the proofs elaborate
+against. -/
 
-#synthesize add3 : Nat → Nat → Nat
+def add3 : Nat → Nat → Nat := by
+  synthesize
   | add3 0 0 = 0
   | add3 0 1 = 1
   | add3 1 1 = 2

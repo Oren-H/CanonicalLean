@@ -10,7 +10,6 @@ public meta import Canonical.ToCanonical.Main
 public meta import Canonical.Main
 public meta import Canonical.FromCanonical
 public meta import Canonical.Symbols
-public meta import RecursorToMatch
 
 open Lean Parser Tactic Meta Elab Tactic Core Monomorphize
 
@@ -20,11 +19,13 @@ public meta section
 
 /-! # Programming by example
 
-`#synthesize f : T` followed by `| f a₁ … aₙ = b` example clauses asks Canonical
-for a function of type `T` that satisfies every example. The examples become
-equational constraints on the declaration under synthesis, following the shape
-of the problem constructed by hand in the Rust repo's `lean/Test.lean`.
-See `ProgramByExample.md` for the design. -/
+Problem construction for synthesis from input–output examples: `toProblem`
+turns a function type and `f a₁ … aₙ = b` example equations into a single
+Canonical inhabitation problem, the examples becoming equational constraints
+on the declaration under synthesis — following the shape of the problem
+constructed by hand in the Rust repo's `lean/Test.lean`. Driven by the
+`synthesize` tactic (`Synthesize.lean`), which replaced the `#synthesize`
+command. See `ProgramByExample.md` for the design. -/
 
 mutual
   /-- Rename occurrences of head symbol `old` to `new` in a translated term. -/
@@ -121,67 +122,6 @@ def satisfiesExample (f candidate ex : Lean.Expr) : MetaM Bool := do
   let some (_, lhs, rhs) := ex.eq? | return true
   withoutArityUnfold do isDefEq lhs rhs
 
-/-- Extra constants made available to the search, as in `canonical [foo, bar]`. -/
-syntax pbePremises := " [" withoutPosition(term,*,?) "]"
+end
 
-/-- A single input–output example: `| f a₁ … aₙ = b`. -/
-syntax pbeExample := "| " term
-
-/-- `#synthesize f : T` followed by `| f a₁ … aₙ = b` clauses searches for a
-    function of type `T` satisfying all of the examples, and suggests it as a
-    definition. An optional numeral sets the timeout in seconds (`#synthesize 30 f
-    : …`), and an optional premise list provides extra constants to the search
-    (`#synthesize [Nat.add] g : …`). -/
-elab (name := synthesizeCmd) "#synthesize " timeout?:(num)? premises?:(pbePremises)?
-    fnameId:ident " : " sig:term exs:pbeExample* : command => do
-  Command.runTermElabM fun _ => do
-    let consts ← if let some prems := premises? then
-        match prems with
-        | `(pbePremises| [$args,*]) => args.getElems.raw.mapM resolveGlobalConstNoOverload
-        | _ => throwUnsupportedSyntax
-      else pure #[]
-    let config : Config := { destruct := false }
-    let fname := fnameId.getId
-
-    let type ← Term.elabType sig
-    Term.synthesizeSyntheticMVarsNoPostponing
-    let type ← instantiateMVars type
-    if type.hasMVar || type.hasLevelMVar then
-      throwErrorAt sig "the signature contains unresolved metavariables{indentExpr type}"
-
-    withLocalDeclD fname type fun f => do
-      let examples ← exs.mapM fun exStx => do
-        let `(pbeExample| | $t:term) := exStx | throwUnsupportedSyntax
-        let e ← Term.elabTermEnsuringType t (some (mkSort .zero))
-        Term.synthesizeSyntheticMVarsNoPostponing
-        let e ← instantiateMVars e
-        if e.hasMVar then
-          throwErrorAt t "the example contains unresolved metavariables{indentExpr e}"
-        let some (_, lhs, _) := e.eq?
-          | throwErrorAt t "an example must be an equation `{fname} a₁ … aₙ = b`"
-        unless lhs.getAppFn == f do
-          throwErrorAt t "the left-hand side of an example must be an application of `{fname}`"
-        pure e
-      if examples.isEmpty then
-        throwError "provide at least one example: `| {fname} a₁ … aₙ = b`"
-
-      let decl ← withArityUnfold config.monomorphize do
-        toProblem fname.toString f type examples consts config
-
-      let timeout : UInt64 := if let some t := timeout? then UInt64.ofNat t.getNat else 5
-      let result ← runCanonical decl timeout config
-
-      let terms ← withArityUnfold config.monomorphize do
-        result.terms.mapM (fromCanonical · type)
-
-      if terms.isEmpty then
-        throwError "No function found. Increase the timeout with `#synthesize {timeout.toNat * 2} \
-          {fname} : …`, add examples, or supply premises with `#synthesize [name, …] {fname} : …`"
-
-      withOptions applyOptions do
-        for t in terms do
-          for ex in examples do
-            unless ← satisfiesExample f t ex do
-              logWarning m!"the synthesized term{indentExpr t}\ndoes not satisfy the example `{ex}`"
-          let cmd ← R2M.mkDefCommand fnameId sig f t type
-          TryThis.addSuggestion (← getRef) cmd
+end Canonical.PBE

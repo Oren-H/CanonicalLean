@@ -1,4 +1,4 @@
-import ProgramByPredicate
+import Synthesize
 import Canonical
 
 inductive Pos where
@@ -43,7 +43,8 @@ instance {n : Nat} : OfNat Bin n where
 instance {n : Nat} : OfNat Pos n.succ where
   ofNat := n.succ.toPosBits
 
-#synthesize_pred 30 add : Bin → Bin → Bin
+def add : Bin → Bin → Bin := by
+  synthesize 30
   | ∀ a b : Bin, add a b = add b a
   | ∀ a : Bin, add a Bin.zero = a
   | add (Bin.pos (Pos.one)) (Bin.pos (Pos.bit0 (Pos.one))) = Bin.pos (Pos.bit1 Pos.one)
