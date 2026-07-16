@@ -49,6 +49,67 @@ mutual
     { r with lhs := renameSpine old new r.lhs, rhs := renameSpine old new r.rhs }
 end
 
+/-- Bound up to which ground `Nat` values reach the solver as unary constructor
+    spines it can compute with. A value above it stays an opaque rule-less
+    symbol, making any example containing it unsatisfiable by computation —
+    `synthesize` drops such examples with a warning. -/
+def MAX_CTOR_NAT := 64
+
+/-- A ground `Nat` value as a constructor spine, the encoding the hand-built
+    problems in the Rust repo's `lean/Test.lean` use for example values. -/
+def natCtorSpine : Nat → Spine
+  | 0 => { head := (``Nat.zero).toString }
+  | n + 1 => { head := (``Nat.succ).toString, args := #[{ spine := natCtorSpine n }] }
+
+/-- The value of a head symbol naming an opaque `Nat` literal (`toHead` names
+    `.lit (.natVal n)` as `n`), if within the constructor-spine bound. -/
+def numeralHead? (h : String) : Option Nat :=
+  h.toNat?.filter (fun n => n ≤ MAX_CTOR_NAT)
+
+mutual
+  /-- All head symbols occurring in a translated term. -/
+  partial def exprHeads (e : Canonical.Expr) : Array String :=
+    e.params.flatMap declHeads ++ e.lets.flatMap declHeads ++ spineHeads e.spine
+
+  partial def spineHeads (s : Spine) : Array String :=
+    s.args.foldl (fun acc a => acc ++ exprHeads a) #[s.head]
+
+  partial def declHeads (d : Canonical.Decl) : Array String :=
+    (d.type.map exprHeads).getD #[] ++ d.equations.flatMap ruleHeads
+
+  partial def ruleHeads (r : Rule) : Array String :=
+    spineHeads r.lhs ++ spineHeads r.rhs
+end
+
+mutual
+  /-- Replace opaque `Nat`-literal symbols by constructor spines. The `whnf`
+      in `toTerm` collapses the examples' `succ` chains into literals and
+      `elimSpecial` re-expands only values ≤ 5, so without this pass any
+      example value above 5 reaches the solver as a symbol it cannot compute
+      with — the equation is then satisfiable only by terms that return the
+      symbol verbatim, which is how overfit candidates arise. -/
+  partial def expandNumeralsExpr (e : Canonical.Expr) : Canonical.Expr :=
+    { e with
+      params := e.params.map expandNumeralsDecl
+      lets := e.lets.map expandNumeralsDecl
+      spine := expandNumeralsSpine e.spine }
+
+  partial def expandNumeralsSpine (s : Spine) : Spine :=
+    if s.args.isEmpty then
+      match numeralHead? s.head with
+      | some n => { natCtorSpine n with premiseRules := s.premiseRules }
+      | none => s
+    else { s with args := s.args.map expandNumeralsExpr }
+
+  partial def expandNumeralsDecl (d : Canonical.Decl) : Canonical.Decl :=
+    { d with
+      type := d.type.map expandNumeralsExpr
+      equations := d.equations.map expandNumeralsRule }
+
+  partial def expandNumeralsRule (r : Rule) : Rule :=
+    { r with lhs := expandNumeralsSpine r.lhs, rhs := expandNumeralsSpine r.rhs }
+end
+
 /-- Translate the signature `type` and the `examples` into a single inhabitation
     problem in one `ToCanonicalM` run, so that every symbol appearing in the type
     or in the examples is defined exactly once. Mirrors `toCanonical_`, except that
@@ -88,6 +149,17 @@ def toProblem_ (fname : String) (f : Lean.Expr) (type : Lean.Expr)
         | throwError "example is not an equation:{indentExpr ex}"
       pure (renameRule fvarHead fname rule)
 
+  -- `Nat` values above 5 come back from `toRule` as opaque rule-less symbols;
+  -- re-expand them into constructor spines (see `expandNumeralsExpr`). The
+  -- constructors are defined explicitly because the equations may be the only
+  -- place they occur.
+  let numerals := (equations.flatMap ruleHeads).filter (fun h => (numeralHead? h).isSome)
+  let equations ← if numerals.isEmpty then pure equations else do
+    withReader (fun ctx => { ctx with polarity := .premise }) do
+      let _ ← defineConst ``Nat.zero
+      let _ ← defineConst ``Nat.succ
+    pure (equations.map expandNumeralsRule)
+
   -- Simp lemmas
   if (← read).config.simp then
     let _ ← addSimpLemmas
@@ -101,7 +173,16 @@ def toProblem_ (fname : String) (f : Lean.Expr) (type : Lean.Expr)
 
   let _ ← finalizeMonos
 
-  return { name := fname, type := some { typ with lets := lets ++ typ.lets }, equations }
+  let decl : Canonical.Decl :=
+    { name := fname, type := some { typ with lets := lets ++ typ.lets }, equations }
+  if numerals.isEmpty then return decl
+  -- Translating the literals also `define`d them, so they linger as rule-less
+  -- premises the search could return verbatim; drop the ones the expanded
+  -- problem no longer references.
+  let referenced := declHeads decl
+  return { decl with type := decl.type.map fun t =>
+    { t with lets := t.lets.filter fun d =>
+        !numerals.contains d.name || referenced.contains d.name } }
 
 /-- Run `toProblem_` with the same context/state initialization as `toCanonical`. -/
 def toProblem (fname : String) (f : Lean.Expr) (type : Lean.Expr) (examples : Array Lean.Expr)

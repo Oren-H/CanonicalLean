@@ -1,7 +1,7 @@
 module
 
 public meta import ProgramByPredicate
-public meta import RecursorToMatch
+public meta import Canonical.Refine
 
 open Lean Parser Tactic Meta Elab Tactic Core Monomorphize
 
@@ -33,8 +33,7 @@ in `ProgramByExample.lean` and `ProgramByPredicate.lean`).
 The instantiated equations become equational constraints on the declaration
 under synthesis (`PBE.toProblem`), and Canonical searches for a function of
 the goal type satisfying them. Like `canonical`, the tactic then admits the
-goal and offers each function found as a `Try this: exact …` suggestion, with
-recursor applications rendered as `match`/`let rec` syntax (`R2M.delabR2M`).
+goal and offers each function found as a `Try this: exact …` suggestion.
 The instantiated equations only *sample* quantified clauses: each candidate
 is re-checked against them by definitional equality (a failure produces a
 warning), but the clauses themselves are not verified — a function
@@ -50,23 +49,16 @@ partial def eraseRecAppMData (e : Lean.Expr) : Lean.Expr :=
       if d.isRecApp then some (eraseRecAppMData b) else none
     else none
 
-/-- Add a `Try this: exact …` suggestion for the synthesized `t : type`, with
-    recursor applications rendered as `match`/`let rec` syntax when the
-    rendering re-elaborates to the same function (`let rec` renderings are
-    accepted as-is, exactly as in `R2M.mkDefCommand`); any failure falls back
-    to the raw recursor display. -/
-def addExactSuggestionR2M (ref : Syntax) (t type : Lean.Expr) : TacticM Unit := do
-  try
-    let body ← R2M.delabR2M t
-    if ← R2M.roundTrips body t type then
-      TryThis.addSuggestion ref (← `(tactic| exact $body))
-      return
-  catch ex =>
-    if ex.isInterrupt || ex.isRuntime then throw ex
-  TryThis.addExactSuggestion ref t
-
 /-- Extra constants made available to the search, as in `canonical [foo, bar]`. -/
 syntax synthPremises := " [" withoutPosition(term,*,?) "]"
+
+/-- Opens the interactive refinement UI on the synthesis problem, as in
+    `canonical +refine`. -/
+syntax synthRefine := " +" &"refine"
+
+/-- Dumps the synthesis problem to `debug.json` instead of searching, as in
+    `canonical +debug`. The dump is replayable by the Rust CLI entrypoint. -/
+syntax synthDebug := atomic(" +" &"debug")
 
 /-- Sets the number of example instantiations generated per clause (default 3). -/
 syntax synthExamples := " (" &"examples" " := " num ")"
@@ -77,9 +69,8 @@ syntax synthClause := "| " term
 
 /-- `synthesize`, in the body of `def f : T := by synthesize`, followed by
     `| ∀ x₁ … xₙ, f a₁ … aₘ = b` clauses, searches for a function of type `T`
-    satisfying all of the clauses and suggests it as `exact …`, with recursor
-    applications rendered as `match`/`let rec` syntax. In the clauses `f`
-    refers to the definition's own name. Each quantified clause is
+    satisfying all of the clauses and suggests it as `exact …`. In the clauses
+    `f` refers to the definition's own name. Each quantified clause is
     instantiated with concrete inputs enumerated by Canonical; a clause
     without binders is an ordinary input–output example. The instantiated
     equations constrain the search as in the former `#synthesize` command,
@@ -88,10 +79,13 @@ syntax synthClause := "| " term
     verified. Once a function is found, the tactic admits the goal and
     suggests it via `Try this:`. An optional numeral sets the timeout in
     seconds (`synthesize 30`), `(examples := n)` sets the number of
-    instantiations per clause, and an optional premise list provides extra
-    constants to the search (`synthesize [Nat.add]`). -/
-elab (name := synthesizeTac) "synthesize " timeout?:(num)? examples?:(synthExamples)?
-    premises?:(synthPremises)? clauses:synthClause* : tactic => do
+    instantiations per clause, an optional premise list provides extra
+    constants to the search (`synthesize [Nat.add]`), and `+refine` opens the
+    interactive refinement UI on the synthesis problem instead of searching,
+    as in `canonical +refine`. -/
+elab (name := synthesizeTac) "synthesize " timeout?:(num)? debug?:(synthDebug)?
+    refine?:(synthRefine)? examples?:(synthExamples)? premises?:(synthPremises)?
+    clauses:synthClause* : tactic => do
   let ref ← getRef
   let goal ← getMainGoal
   goal.withContext do
@@ -108,7 +102,8 @@ elab (name := synthesizeTac) "synthesize " timeout?:(num)? examples?:(synthExamp
     if k == 0 then
       throwError "the number of examples per clause must be positive"
     let timeout : UInt64 := if let some t := timeout? then UInt64.ofNat t.getNat else 5
-    let config : Config := { destruct := false }
+    let config : Config := { destruct := false, refine := refine?.isSome,
+                             debug := debug?.isSome }
 
     let type ← instantiateMVars (← goal.getType)
     if type.hasMVar || type.hasLevelMVar then
@@ -185,7 +180,19 @@ elab (name := synthesizeTac) "synthesize " timeout?:(num)? examples?:(synthExamp
       for vals in inputs do
         examples := examples.push (← PBP.reduceGroundEq f (body.instantiateRev vals))
     examples := PBP.dedupExamples examples
+    -- A numeral above `MAX_CTOR_NAT` stays an opaque literal the solver cannot
+    -- compute with (`natLitToCtor` leaves it alone), so an example containing
+    -- one is unsatisfiable and would poison the whole search.
+    let (kept, dropped) := examples.partition fun ex =>
+      (ex.find? fun sub => sub matches .lit (.natVal _)).isNone
+    for ex in dropped do
+      logWarning m!"ignoring the example `{ex}`: it contains a numeral larger than \
+        {PBE.MAX_CTOR_NAT}, which the search cannot compute with"
+    examples := kept
     if examples.isEmpty then
+      if !dropped.isEmpty then
+        throwError "every instantiated example contains a numeral larger than \
+          {PBE.MAX_CTOR_NAT}, which the search cannot compute with"
       throwError "all instantiated examples are trivial equations; increase \
         `(examples := n)` or add clauses"
     logInfo m!"instantiated {examples.size} example equation(s):{indentD
@@ -194,6 +201,28 @@ elab (name := synthesizeTac) "synthesize " timeout?:(num)? examples?:(synthExamp
     -- From here on, the pipeline is that of the former `#synthesize`.
     let decl ← withArityUnfold config.monomorphize do
       PBE.toProblem fname.toString f type examples consts config
+
+    if config.debug then
+      Elab.admitGoal goal
+      save_problem decl "debug.json"
+      return
+
+    -- Refinement UI, as in `canonical +refine`. No preprocessing was applied,
+    -- so the processed goal is the goal itself; reconstruction only pins the
+    -- candidate's level metavariables, as in the search path below.
+    if config.refine then
+      let _ ← Canonical.refine decl
+      let (width, indent, column, range) ← widthIndentColumnRange
+      let x : Server.WithRpcRef RpcData ← Server.WithRpcRef.mk {
+        mctx := ← getMCtx, mainGoal := goal, config,
+        reconstruct := fun e => return (← PBP.pinCandidate? e).getD e,
+        width, indent, column, processedGoal := goal
+      }
+      Elab.admitGoal goal
+      Widget.savePanelWidgetInfo (hash refineWidget.javascript) ref (props := do
+        let rpcData ← Server.RpcEncodable.rpcEncode x
+        return Json.mkObj [("rpcData", rpcData), ("range", ToJson.toJson range)])
+      return
 
     let result ← runCanonical decl timeout config
 
@@ -212,7 +241,7 @@ elab (name := synthesizeTac) "synthesize " timeout?:(num)? examples?:(synthExamp
             logWarning m!"the synthesized term{indentExpr candidate}\ndoes not satisfy \
               the instantiated example `{ex}`"
         let candidate := (← PBP.pinCandidate? candidate).getD candidate
-        addExactSuggestionR2M ref candidate type
+        TryThis.addExactSuggestion ref candidate
       Elab.admitGoal goal
 
 end

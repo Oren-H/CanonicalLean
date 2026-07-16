@@ -139,14 +139,13 @@ where
   | .forallE _ binderType body _ => go (types.push binderType) body
   | body => (types, body)
 
-/-- `elimSpecial` only turns `Nat` literals ≤ 5 into constructor spines the
-    solver can compute with; instantiated predicates readily produce larger
-    values (e.g. `double 4 = 8`), so we convert up to this bound ourselves. -/
-def MAX_CTOR_NAT := 64
-
-/-- Convert `Nat` literals produced by reduction into constructor form. -/
+/-- Convert `Nat` literals produced by reduction into constructor form, so the
+    logged examples and the defeq re-checks match what the solver computes
+    with. This form does not survive translation — the `whnf` in `toTerm`
+    collapses the chains back into literals — so the spines that actually
+    reach the solver are re-expanded afterwards, in `PBE.toProblem_`. -/
 partial def natLitToCtor : Lean.Expr → Lean.Expr
-  | .lit (.natVal n) => if n ≤ MAX_CTOR_NAT then rawRawNatLit n else .lit (.natVal n)
+  | .lit (.natVal n) => if n ≤ PBE.MAX_CTOR_NAT then rawRawNatLit n else .lit (.natVal n)
   | .app fn arg => .app (natLitToCtor fn) (natLitToCtor arg)
   | e => e
 

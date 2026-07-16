@@ -16,7 +16,21 @@ def f : Nat → Nat → Nat := by
   synthesize
   | f 0 0 = 0
   | f 0 1 = 1
-  | f 1 1 = 2
+  | f 1 0 = 1
+  | f 2 2 = 4
+  | f 2 3 = 5
+  | f 3 9 = 12
+  | f 9 3 = 12
+  | f 10 10 = 20
+
+
+
+
+
+
+
+
+
 
 -- The predecessor function, requiring case analysis.
 def pred : Nat → Nat := by
@@ -68,30 +82,10 @@ def add : Nat → Nat → Nat := by
   | ∀ n : Nat, add n 0 = n
   | add 1 1 = 2
 
-/-! ## Pasted outputs
 
-Applying a suggestion replaces `synthesize …` with `exact …` inside the `by`
-block. The declarations below are outputs of earlier runs and must keep
-elaborating. -/
-
--- A `let rec`/`match` rendering elaborates in `exact` position.
-def add2 : Nat → Nat → Nat := by
-  exact fun a b =>
-    let rec go : Nat → Nat := fun x =>
-      match x with
-      | Nat.zero => a
-      | Nat.succ n => (go n).succ
-    go b
-
-example : add2 3 4 = 7 := rfl
-example : add2 3 0 = 3 := rfl
-
--- An inline-`match` rendering (non-recursive elimination).
-def pred2 : Nat → Nat := by
-  exact fun a =>
-    match a with
-    | Nat.zero => a
-    | Nat.succ n => n
-
-example : pred2 0 = 0 := rfl
-example : pred2 3 = 2 := rfl
+def mul : Nat → Nat → Nat := by
+  synthesize
+  | mul 0 0 = 0
+  | mul 0 1 = 0
+  | mul 2 2 = 4
+  | mul 2 1 = 2
