@@ -89,3 +89,27 @@ def mul : Nat → Nat → Nat := by
   | mul 0 1 = 0
   | mul 2 2 = 4
   | mul 2 1 = 2
+
+/-! ## Existential clauses -/
+
+-- The `∃`-binder is skolemized into a skolem function `y : Nat → Nat`
+-- synthesized alongside `zero'`; the instantiated equations are
+-- `zero' n (y n) = 0`, and the found witness is reported as an info message.
+-- Several joint solutions exist, e.g. `zero' = fun a b ↦ b` with
+-- `y := fun x ↦ 0`.
+def zero' : Nat → Nat → Nat := by
+  synthesize
+  | ∀ x : Nat, ∃ y : Nat, zero' x y = 0
+
+-- The witness genuinely matters: the clause samples to `inv (y n) = n`, so
+-- `inv` and `y` are forced jointly (`inv = fun a ↦ a` with `y := fun x ↦ x`).
+def inv : Nat → Nat := by
+  synthesize
+  | ∀ x : Nat, ∃ y : Nat, inv y = x
+
+-- An existential clause mixes with ordinary examples; an `∃`-block with no
+-- universal prefix has a constant witness (here `y := 1`).
+def one' : Nat → Nat := by
+  synthesize
+  | ∃ y : Nat, one' y = 1
+  | one' 0 = 0

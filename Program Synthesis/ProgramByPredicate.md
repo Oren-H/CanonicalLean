@@ -57,6 +57,49 @@ Each candidate returned by the solver is re-checked against the instantiated
 equations by definitional equality after reconstruction; a failure produces a
 warning.
 
+### Existential clauses
+
+A clause may carry an existential block after its universal prefix:
+
+```lean
+def inv : Nat → Nat := by
+  synthesize
+  | ∀ x : Nat, ∃ y : Nat, inv y = x
+```
+
+The clause is *skolemized* (`PBP.skolemizeClause`): each `∃ y : T` becomes a
+fresh local `y : ∀ x₁ … xₙ, T` — a **skolem function** that is an unknown under
+synthesis alongside the declaration — and the body is instantiated with
+`y x₁ … xₙ`, leaving an ordinary universally quantified equation that is
+sampled exactly as above (here `inv (y 0) = 0`, `inv (y 1) = 1`, …).
+
+The unknowns are synthesized **jointly**, as a single term: the goal sent to
+Canonical becomes the CPS form of the tuple `T_f ×' T_y ×' …` produced by the
+same `dneg` transformation `destruct` applies to structure goals,
+`∀ (D : STAR (Sort u)), (T_f → T_y → D) → D`, and each instantiated equation is
+rewritten to select its unknowns out of the tuple by continuation
+(`PBP.wrapUnknowns`): a side `inv (y 0)` becomes `g Nat (fun inv y ↦ inv (y 0))`
+for `g` the local standing for the tuple. Once the solver substitutes a
+candidate `fun D k ↦ k inv_val y_val`, β-reduction alone evaluates the
+constraint — no reduction rules beyond the translation's are needed. The
+declaration's component is projected out of each candidate for the
+`Try this:` suggestion (`PBP.projectComponent`), and the witnesses are
+reported as info messages (`y := fun x ↦ x`). Note that `destruct`'s own
+`Exists` case is of no use here — it takes the witness of a *given* proof via
+`Exists.choose`, and no proof exists; the witness is what is being
+synthesized.
+
+Restrictions: the existential block must sit between the universal prefix and
+the equation (`∀ xs, ∃ ys, lhs = rhs` — no `∀` after an `∃`, no `∃` under
+other connectives); the type of an existential variable may depend on the
+clause's universal variables but not on locals or earlier existential
+variables; the goal type must be closed; and neither the signature nor a
+skolem type may contain structure types that `destruct` would unpack (`Prod`,
+`Fin`, `Subtype`, …), since unpacking would break the tuple's correspondence
+with the wrapped equations. Like universal clauses, existential clauses are
+only sampled: the candidate satisfies the instantiated equations, witnesses
+included, not the predicate itself.
+
 ## How it works
 
 Implementation: this file, `ProgramByPredicate.lean` (namespace

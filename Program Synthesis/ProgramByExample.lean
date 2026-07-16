@@ -114,14 +114,17 @@ end
     problem in one `ToCanonicalM` run, so that every symbol appearing in the type
     or in the examples is defined exactly once. Mirrors `toCanonical_`, except that
     the local variable `f` standing for the function is excluded from the premises
-    and the examples become `equations` of the returned goal declaration. -/
+    and the examples become `equations` of the returned goal declaration. The
+    `excluded` locals (skolem witnesses, which are unknowns under synthesis
+    alongside `f`) are likewise kept out of the premises. -/
 def toProblem_ (fname : String) (f : Lean.Expr) (type : Lean.Expr)
-    (examples : Array Lean.Expr) (premises : Array Name) : ToCanonicalM Canonical.Decl := do
+    (examples : Array Lean.Expr) (premises : Array Name)
+    (excluded : Array Lean.Expr := #[]) : ToCanonicalM Canonical.Decl := do
   -- Local context (section variables). `f` is the declaration being synthesized,
   -- so it must not be available as a premise.
   let lets : Array Canonical.Decl ← withReader (fun ctx => { ctx with polarity := .premise }) do
     (← getLCtx).foldlM (fun lets decl => do
-      if !decl.isAuxDecl && decl.toExpr != f then
+      if !decl.isAuxDecl && decl.toExpr != f && !excluded.contains decl.toExpr then
         let (name, declType) ← toHead decl.toExpr
         if let some value := decl.value? then
           let rule := defRule name.toString (← toTerm value declType (← typeArity declType).params.toList)
@@ -186,9 +189,10 @@ def toProblem_ (fname : String) (f : Lean.Expr) (type : Lean.Expr)
 
 /-- Run `toProblem_` with the same context/state initialization as `toCanonical`. -/
 def toProblem (fname : String) (f : Lean.Expr) (type : Lean.Expr) (examples : Array Lean.Expr)
-    (premises : Array Name) (config : Config) : MetaM Canonical.Decl := do
+    (premises : Array Name) (config : Config)
+    (excluded : Array Lean.Expr := #[]) : MetaM Canonical.Decl := do
   let lctx ← getLCtx
-  (((toProblem_ fname f type examples premises).run
+  (((toProblem_ fname f type examples premises excluded).run
     {
       arities := ← lctx.foldlM (fun arities decl => do
         pure (arities.insert decl.fvarId (← typeArity decl.type)))
@@ -196,10 +200,11 @@ def toProblem (fname : String) (f : Lean.Expr) (type : Lean.Expr) (examples : Ar
     }).run' { }).run'
       { globalFVars := .ofArray lctx.getFVarIds, constNames := .ofList [``OfNat.ofNat] }
 
-/-- Check that `candidate` satisfies the example `ex` (an equation in the local
-    variable `f`) up to definitional equality. -/
-def satisfiesExample (f candidate ex : Lean.Expr) : MetaM Bool := do
-  let ex := ex.replaceFVar f candidate
+/-- Check that the `values` synthesized for the unknown locals `unknowns` (the
+    function under synthesis, and any skolem witnesses) satisfy the example `ex`
+    (an equation in those locals) up to definitional equality. -/
+def satisfiesExample (unknowns values : Array Lean.Expr) (ex : Lean.Expr) : MetaM Bool := do
+  let ex := ex.replaceFVars unknowns values
   let some (_, lhs, rhs) := ex.eq? | return true
   withoutArityUnfold do isDefEq lhs rhs
 
