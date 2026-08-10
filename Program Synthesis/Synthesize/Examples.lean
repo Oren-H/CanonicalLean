@@ -113,3 +113,13 @@ def one' : Nat → Nat := by
   synthesize
   | ∃ y : Nat, one' y = 1
   | one' 0 = 0
+
+def sort : List Nat → List Nat := by
+  synthesize 60
+  | sort [] = []
+  | sort [0] = [0]
+  | sort [1,0] = [0,1]
+
+
+
+=
