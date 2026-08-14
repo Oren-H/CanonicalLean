@@ -46,7 +46,7 @@ def sortTerms (terms : Array Lean.Expr) : MetaM (Array Lean.Expr) := do
 def enumerate (type : Lean.Expr) (count : Nat) (timeout : UInt64 := 5) :
     MetaM (Array Lean.Expr) := do
   let config : Config := { count := USize.ofNat count, destruct := false }
-  let typ ← toCanonical type #[] #[``Pi] config
+  let typ ← toCanonical type #[] #[] config
   let result ← runCanonical { name := "enumerate", type := some typ } timeout config
   let terms ← result.terms.mapM fun term => do instantiateMVars (← fromCanonical term type)
   sortTerms terms
