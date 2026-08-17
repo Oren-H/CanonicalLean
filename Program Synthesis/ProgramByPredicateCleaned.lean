@@ -23,33 +23,15 @@ the design. -/
 We use Canonical with `count := k` to enumerate the first `k` distinct
 inhabitants, which we use as example inputs for the quantified variables. -/
 
-/-- If `e` is a concrete `Nat` value, return it. -/
-def natValue? (e : Lean.Expr) : MetaM (Option Nat) := do
-  match ← whnf e with
-  | .lit (.natVal n) => return some n
-  | .const ``Nat.zero _ => return some 0
-  | _ => return none
-
-/-- Sort enumerated terms deterministically: `Nat` values ascending, then
-    everything else by approximate depth and rendering. -/
-def sortTerms (terms : Array Lean.Expr) : MetaM (Array Lean.Expr) := do
-  let keyed ← terms.mapM fun e => do
-    let rank := match ← natValue? e with
-      | some n => n
-      | none => 1000000 + e.approxDepth.toNat
-    pure (rank, toString (← ppExpr e), e)
-  return (keyed.qsort fun x y => x.1 < y.1 || (x.1 == y.1 && x.2.1 < y.2.1)).map (·.2.2)
-
 /-- Run Canonical on `type`, returning the first `count` inhabitants in
-    deterministic order. Translates the type directly — constructors come from
+    search order. Translates the type directly — constructors come from
     walking the type, with no premise selection or destruct preprocessing. -/
 def enumerate (type : Lean.Expr) (count : Nat) (timeout : UInt64 := 5) :
     MetaM (Array Lean.Expr) := do
   let config : Config := { count := USize.ofNat count, destruct := false, simp := false }
   let typ ← toCanonical type #[] #[] config
   let result ← runCanonical { name := "enumerate", type := some typ } timeout config
-  let terms ← result.terms.mapM fun term => do instantiateMVars (← fromCanonical term type)
-  sortTerms terms
+  result.terms.mapM fun term => do instantiateMVars (← fromCanonical term type)
 
 /-- Memoizes `enumerate` results per `(type, count)` for the duration of one
     command, so that two binders of the same type see the same example terms
