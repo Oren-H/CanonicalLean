@@ -45,7 +45,7 @@ def sortTerms (terms : Array Lean.Expr) : MetaM (Array Lean.Expr) := do
     walking the type, with no premise selection or destruct preprocessing. -/
 def enumerate (type : Lean.Expr) (count : Nat) (timeout : UInt64 := 5) :
     MetaM (Array Lean.Expr) := do
-  let config : Config := { count := USize.ofNat count, destruct := false }
+  let config : Config := { count := USize.ofNat count, destruct := false, simp := false }
   let typ ← toCanonical type #[] #[] config
   let result ← runCanonical { name := "enumerate", type := some typ } timeout config
   let terms ← result.terms.mapM fun term => do instantiateMVars (← fromCanonical term type)
