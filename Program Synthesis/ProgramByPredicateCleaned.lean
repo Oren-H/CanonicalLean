@@ -25,10 +25,11 @@ inhabitants, which we use as example inputs for the quantified variables. -/
 
 /-- Run Canonical on `type`, returning the first `count` inhabitants in
     search order. Translates the type directly — constructors come from
-    walking the type, with no premise selection or destruct preprocessing. -/
+    walking the type, with no premise selection, destruct preprocessing,
+    or auto-added recursors (`-recs`). -/
 def enumerate (type : Lean.Expr) (count : Nat) (timeout : UInt64 := 5) :
     MetaM (Array Lean.Expr) := do
-  let config : Config := { count := USize.ofNat count, destruct := false, simp := false }
+  let config : Config := { count := USize.ofNat count, destruct := false, simp := false, recs := false }
   let typ ← toCanonical type #[] #[] config
   let result ← runCanonical { name := "enumerate", type := some typ } timeout config
   result.terms.mapM fun term => do instantiateMVars (← fromCanonical term type)
