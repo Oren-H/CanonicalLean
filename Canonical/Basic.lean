@@ -82,3 +82,5 @@ structure Config where
   destruct: Bool := true
   /-- Add premises from the current premise selector. -/
   suggestions: Bool := false
+  /-- Add the recursor of each inductive type as a let. -/
+  recs: Bool := true

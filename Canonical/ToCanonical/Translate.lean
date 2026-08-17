@@ -197,7 +197,7 @@ mutual
         if let some info := getStructureInfo? env name then
           for field in info.fieldInfo do
             let _ ← defineConst field.projFn
-        else
+        else if (← read).config.recs then
           let _ ← defineConst (mkRecName name)
 
   /-- `define` call specialized with `onDefineConst` and `onTypeConst` -/
