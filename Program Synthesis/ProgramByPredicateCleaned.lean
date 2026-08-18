@@ -24,29 +24,13 @@ We use Canonical with `count := k` to enumerate the first `k` distinct
 inhabitants, which we use as example inputs for the quantified variables. -/
 
 /-- Run Canonical on `type`, returning the first `count` inhabitants in
-    search order. Translates the type directly — constructors come from
-    walking the type, with no premise selection, destruct preprocessing,
-    or auto-added recursors (`-recs`). -/
+    search order. -/
 def enumerate (type : Lean.Expr) (count : Nat) (timeout : UInt64 := 5) :
     MetaM (Array Lean.Expr) := do
   let config : Config := { count := USize.ofNat count, destruct := false, simp := false, recs := false }
   let typ ← toCanonical type #[] #[] config
   let result ← runCanonical { name := "enumerate", type := some typ } timeout config
   result.terms.mapM fun term => do instantiateMVars (← fromCanonical term type)
-
-/-- Memoizes `enumerate` results per `(type, count)` for the duration of one
-    command, so that two binders of the same type see the same example terms
-    (separate solver runs need not return the same enumeration). -/
-abbrev EnumCache := IO.Ref (Array ((Lean.Expr × Nat) × Array Lean.Expr))
-
-/-- `enumerate`, memoized in `cache`. -/
-def enumerateCached (cache : EnumCache) (type : Lean.Expr) (count : Nat)
-    (timeout : UInt64 := 5) : MetaM (Array Lean.Expr) := do
-  if let some (_, terms) := (← cache.get).find? (fun (key, _) => key == (type, count)) then
-    return terms
-  let terms ← enumerate type count timeout
-  cache.modify (·.push ((type, count), terms))
-  return terms
 
 /-- Cartesian product of heterogeneous term lists; the last index varies fastest. -/
 partial def allHeteroTuples (termLists : Array (Array Lean.Expr)) : Array (Array Lean.Expr) :=
@@ -70,14 +54,14 @@ partial def minTermCount (k dim : Nat) : Nat :=
 /-- Enumerate enough terms of each type to form at least `k` tuples, growing
     the per-type counts until the cartesian product is large enough (or no
     type yields further terms). -/
-def gatherTerms (cache : EnumCache) (types : Array Lean.Expr) (k : Nat)
+def gatherTerms (types : Array Lean.Expr) (k : Nat)
     (timeout : UInt64 := 5) : MetaM (Array (Array Lean.Expr)) := do
   if types.isEmpty then return #[]
   let dim := types.size
   if dim == 1 then
-    return #[← enumerateCached cache types[0]! k timeout]
+    return #[← enumerate types[0]! k timeout]
   let mut counts := Array.replicate dim (minTermCount k dim)
-  let mut termLists ← types.mapIdxM fun i ty => enumerateCached cache ty counts[i]! timeout
+  let mut termLists ← types.mapIdxM fun i ty => enumerate ty counts[i]! timeout
   while cartesianSize termLists < k do
     let mut grown := false
     for i in [0:dim] do
@@ -85,17 +69,17 @@ def gatherTerms (cache : EnumCache) (types : Array Lean.Expr) (k : Nat)
         counts := counts.set! i (counts[i]! + 1)
         grown := true
     if !grown then break
-    termLists ← types.mapIdxM fun i ty => enumerateCached cache ty counts[i]! timeout
+    termLists ← types.mapIdxM fun i ty => enumerate ty counts[i]! timeout
   return termLists
 
 /-- Enumerate the first `k` example assignments for heterogeneous quantified
     variables; each inner array is one assignment in binder order. An empty
     `types` yields the single empty assignment. -/
-def enumerateInputs (cache : EnumCache) (types : Array Lean.Expr) (k : Nat)
+def enumerateInputs (types : Array Lean.Expr) (k : Nat)
     (timeout : UInt64 := 5) : MetaM (Array (Array Lean.Expr)) := do
   if k == 0 then return #[]
   if types.isEmpty then return #[#[]]
-  let termLists ← gatherTerms cache types k timeout
+  let termLists ← gatherTerms types k timeout
   if termLists.any (·.isEmpty) then return #[]
   return (allHeteroTuples termLists).take k
 
