@@ -45,6 +45,11 @@ lean_lib Synthesize where
   srcDir := "Program Synthesis"
   roots := #[`Synthesize, `Synthesize.Examples]
 
+/-- Cleaned `synthesize` pipeline (`ProgramByPredicateCleaned` + `SynthesizeCleaned`); original `Synthesize` is unchanged. -/
+lean_lib SynthesizeCleaned where
+  srcDir := "Program Synthesis"
+  roots := #[`ProgramByPredicateCleaned, `SynthesizeCleaned, `SynthesizeCleaned.Examples]
+
 /-- Recursor-application → `match`-syntax rendering for synthesis suggestions; see `Program Synthesis/RecursorToMatch.md`. -/
 lean_lib RecursorToMatch where
   srcDir := "Program Synthesis"

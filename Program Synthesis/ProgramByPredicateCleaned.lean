@@ -94,54 +94,6 @@ where
   | .forallE _ binderType body _ => go (types.push binderType) body
   | body => (types, body)
 
-/-- Convert `Nat` literals produced by reduction into constructor form, so the
-    logged examples and the defeq re-checks match what the solver computes
-    with. This form does not survive translation — the `whnf` in `toTerm`
-    collapses the chains back into literals — so the spines that actually
-    reach the solver are re-expanded afterwards, in `PBE.toProblem_`. -/
-partial def natLitToCtor : Lean.Expr → Lean.Expr
-  | .lit (.natVal n) => if n ≤ PBE.MAX_CTOR_NAT then rawRawNatLit n else .lit (.natVal n)
-  | .app fn arg => .app (natLitToCtor fn) (natLitToCtor arg)
-  | e => e
-
-/-- Evaluate the ground parts of an instantiated example: a subterm that does
-    not mention `f` and is either a whole side of the equation or a direct
-    argument of `f` is reduced to normal form (so `pred (1 + 1) = 1` becomes
-    `pred 2 = 1`), with `Nat` literals converted to constructor form.
-    Subterms under other heads are left to the usual translation. -/
-partial def reduceGround (f : Lean.Expr) (e : Lean.Expr) : MetaM Lean.Expr := do
-  if !e.containsFVar f.fvarId! then
-    return natLitToCtor (← Meta.reduce e (skipTypes := true) (skipProofs := true))
-  else
-    e.withApp fun fn args => do
-      if fn == f then
-        return mkAppN fn (← args.mapM (reduceGround f))
-      else
-        return mkAppN fn (← args.mapM fun arg =>
-          if arg.containsFVar f.fvarId! then reduceGround f arg else pure arg)
-
-/-- Apply `reduceGround` to both sides of an instantiated example equation. -/
-def reduceGroundEq (f e : Lean.Expr) : MetaM Lean.Expr := do
-  let some (α, lhs, rhs) := e.eq? | return e
-  return mkApp3 e.getAppFn α (← reduceGround f lhs) (← reduceGround f rhs)
-
-/-- Drop instantiated examples that are syntactically trivial (`a = a`) or
-    duplicates of an earlier example, up to symmetry of the equation — from
-    `∀ n m, f n m = f m n` both `f 0 1 = f 1 0` and its mirror image are
-    generated, and keeping both would orient a rewrite loop. -/
-def dedupExamples (examples : Array Lean.Expr) : Array Lean.Expr := Id.run do
-  let mut seen : Array (Lean.Expr × Lean.Expr) := #[]
-  let mut out := #[]
-  for e in examples do
-    let some (_, lhs, rhs) := e.eq? | continue
-    if lhs == rhs then
-      continue
-    if seen.any fun (l, r) => (l == lhs && r == rhs) || (l == rhs && r == lhs) then
-      continue
-    seen := seen.push (lhs, rhs)
-    out := out.push e
-  return out
-
 /-! ## Existential clauses
 
 A clause may carry an existential block after its universal prefix:
