@@ -13,7 +13,7 @@ public meta section
 Machinery for synthesis from `∀ x₁ … xₙ, f a₁ … aₘ = b` predicate clauses,
 driven by the `synthesize` tactic. Each predicate is instantiated with concrete
 example inputs — themselves enumerated by Canonical, using its `count` option
-on the binder types and the resulting ground equations become equational
+on the product of the binder types — and the resulting ground equations become equational
 constraints on the declaration under synthesis. The predicates
 themselves are only sampled, not verified. See `ProgramByPredicate.md` for
 the design. -/
@@ -21,7 +21,9 @@ the design. -/
 /-! ## Term enumeration
 
 We use Canonical with `count := k` to enumerate the first `k` distinct
-inhabitants, which we use as example inputs for the quantified variables. -/
+inhabitants, which we use as example inputs for the quantified variables.
+Several binders are enumerated as a single right-nested `PProd`, whose
+search order already mixes the components by term size. -/
 
 /-- Run Canonical on `type`, returning the first `count` inhabitants in
     search order. -/
@@ -32,56 +34,31 @@ def enumerate (type : Lean.Expr) (count : Nat) (timeout : UInt64 := 5) :
   let result ← runCanonical { name := "enumerate", type := some typ } timeout config
   result.terms.mapM fun term => do instantiateMVars (← fromCanonical term type)
 
-/-- Cartesian product of heterogeneous term lists; the last index varies fastest. -/
-partial def allHeteroTuples (termLists : Array (Array Lean.Expr)) : Array (Array Lean.Expr) :=
-  if termLists.isEmpty then #[]
-  else if termLists.size == 1 then termLists[0]!.map (#[·])
-  else
-    let sub := allHeteroTuples (termLists.extract 1 termLists.size)
-    termLists[0]!.flatMap fun t => sub.map (#[t] ++ ·)
+/-- Right-nested `PProd` of `types` (which must be nonempty). `PProd` rather
+    than `Prod`, so a `Prop` binder can sit next to a `Type` one. -/
+def mkTupleType (types : Array Lean.Expr) : MetaM Lean.Expr := do
+  types.pop.foldrM (init := types.back!) fun t acc => mkAppM ``PProd #[t, acc]
 
-def cartesianSize (termLists : Array (Array Lean.Expr)) : Nat :=
-  termLists.foldl (fun acc ts => acc * ts.size) 1
+/-- Unpack a right-nested `PProd.mk` spine into `n` components. -/
+partial def uncurryPProd (e : Lean.Expr) (n : Nat) : MetaM (Array Lean.Expr) := do
+  if n <= 1 then return #[e]
+  let e ← whnf e
+  let (fn, args) := e.getAppFnArgs
+  if fn == ``PProd.mk && args.size == 4 then
+    return #[args[2]!] ++ (← uncurryPProd args[3]! (n - 1))
+  throwError "enumerated tuple is not a pair:{indentExpr e}"
 
-/-- Smallest `m` with `m ^ dim ≥ k` (uniform enumeration bound per dimension). -/
-partial def minTermCount (k dim : Nat) : Nat :=
-  if k == 0 then 0
-  else if dim == 0 then k
-  else
-    let rec go (m : Nat) : Nat := if m ^ dim ≥ k then m else go (m + 1)
-    go 1
-
-/-- Enumerate enough terms of each type to form at least `k` tuples, growing
-    the per-type counts until the cartesian product is large enough (or no
-    type yields further terms). -/
-def gatherTerms (types : Array Lean.Expr) (k : Nat)
-    (timeout : UInt64 := 5) : MetaM (Array (Array Lean.Expr)) := do
-  if types.isEmpty then return #[]
-  let dim := types.size
-  if dim == 1 then
-    return #[← enumerate types[0]! k timeout]
-  let mut counts := Array.replicate dim (minTermCount k dim)
-  let mut termLists ← types.mapIdxM fun i ty => enumerate ty counts[i]! timeout
-  while cartesianSize termLists < k do
-    let mut grown := false
-    for i in [0:dim] do
-      if termLists[i]!.size == counts[i]! then
-        counts := counts.set! i (counts[i]! + 1)
-        grown := true
-    if !grown then break
-    termLists ← types.mapIdxM fun i ty => enumerate ty counts[i]! timeout
-  return termLists
-
-/-- Enumerate the first `k` example assignments for heterogeneous quantified
-    variables; each inner array is one assignment in binder order. An empty
-    `types` yields the single empty assignment. -/
+/-- Enumerate the first `k` example assignments for the quantified variables
+    by inhabiting their (product) type; each inner array is one assignment
+    in binder order. An empty `types` yields the single empty assignment. -/
 def enumerateInputs (types : Array Lean.Expr) (k : Nat)
     (timeout : UInt64 := 5) : MetaM (Array (Array Lean.Expr)) := do
   if k == 0 then return #[]
   if types.isEmpty then return #[#[]]
-  let termLists ← gatherTerms types k timeout
-  if termLists.any (·.isEmpty) then return #[]
-  return (allHeteroTuples termLists).take k
+  if types.size == 1 then
+    return (← enumerate types[0]! k timeout).map (#[·])
+  let tuples ← enumerate (← mkTupleType types) k timeout
+  tuples.mapM fun t => uncurryPProd t types.size
 
 /-! ## Predicate instantiation -/
 
