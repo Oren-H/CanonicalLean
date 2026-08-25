@@ -22,7 +22,7 @@ the design. -/
 
 We use Canonical with `count := k` to enumerate the first `k` distinct
 inhabitants, which we use as example inputs for the quantified variables.
-Several binders are enumerated as a single right-nested `PProd`, whose
+Several binders are enumerated as a single right-nested `Prod`, whose
 search order already mixes the components by term size. -/
 
 /-- Run Canonical on `type`, returning the first `count` inhabitants in
@@ -34,18 +34,17 @@ def enumerate (type : Lean.Expr) (count : Nat) (timeout : UInt64 := 5) :
   let result ← runCanonical { name := "enumerate", type := some typ } timeout config
   result.terms.mapM fun term => do instantiateMVars (← fromCanonical term type)
 
-/-- Right-nested `PProd` of `types` (which must be nonempty). `PProd` rather
-    than `Prod`, so a `Prop` binder can sit next to a `Type` one. -/
+/-- Right-nested `Prod` of `types` (which must be nonempty). -/
 def mkTupleType (types : Array Lean.Expr) : MetaM Lean.Expr := do
-  types.pop.foldrM (init := types.back!) fun t acc => mkAppM ``PProd #[t, acc]
+  types.pop.foldrM (init := types.back!) fun t acc => mkAppM ``Prod #[t, acc]
 
-/-- Unpack a right-nested `PProd.mk` spine into `n` components. -/
-partial def uncurryPProd (e : Lean.Expr) (n : Nat) : MetaM (Array Lean.Expr) := do
+/-- Unpack a right-nested `Prod.mk` spine into `n` components. -/
+partial def uncurryProd (e : Lean.Expr) (n : Nat) : MetaM (Array Lean.Expr) := do
   if n <= 1 then return #[e]
   let e ← whnf e
   let (fn, args) := e.getAppFnArgs
-  if fn == ``PProd.mk && args.size == 4 then
-    return #[args[2]!] ++ (← uncurryPProd args[3]! (n - 1))
+  if fn == ``Prod.mk && args.size == 4 then
+    return #[args[2]!] ++ (← uncurryProd args[3]! (n - 1))
   throwError "enumerated tuple is not a pair:{indentExpr e}"
 
 /-- Enumerate the first `k` example assignments for the quantified variables
@@ -58,7 +57,7 @@ def enumerateInputs (types : Array Lean.Expr) (k : Nat)
   if types.size == 1 then
     return (← enumerate types[0]! k timeout).map (#[·])
   let tuples ← enumerate (← mkTupleType types) k timeout
-  tuples.mapM fun t => uncurryPProd t types.size
+  tuples.mapM fun t => uncurryProd t types.size
 
 /-! ## Predicate instantiation -/
 
