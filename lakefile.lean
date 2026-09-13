@@ -54,3 +54,8 @@ lean_lib SynthesizeCleaned where
 lean_lib RecursorToMatch where
   srcDir := "Program Synthesis"
   roots := #[`RecursorToMatch, `RecursorToMatch.Examples]
+
+/-- Minimal `synthesize` from first-order clauses (`∀`/`∃` nested freely, `∧`, equations), Skolemized by `destruct`. -/
+lean_lib ProgramByPredicateMinimal where
+  srcDir := "Program Synthesis"
+  roots := #[`ProgramByPredicateMinimal, `ProgramByPredicateMinimal.Examples]
