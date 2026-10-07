@@ -59,3 +59,8 @@ lean_lib RecursorToMatch where
 lean_lib ProgramByPredicateMinimal where
   srcDir := "Program Synthesis"
   roots := #[`ProgramByPredicateMinimal, `ProgramByPredicateMinimal.Examples]
+
+/-- Scratch `synthesize` from a type and input/output examples. -/
+lean_lib SynthesisFromScratch where
+  srcDir := "Program Synthesis"
+  roots := #[`SynthesisFromScratch]
